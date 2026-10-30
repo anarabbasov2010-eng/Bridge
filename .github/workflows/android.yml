@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     paths: ["src/**","src-tauri/**","package.json","vitest.config.ts",".github/workflows/android.yml"]
+concurrency:
+  group: bridge-android-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -29,6 +32,7 @@ jobs:
           echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
       - run: npm install
       - run: npx tauri icon src-tauri/icons/bridge.svg --output src-tauri/icons
+      - run: npm run test
       - name: Initialize Android project
         run: npm run android:init
       - name: Build debug APK
