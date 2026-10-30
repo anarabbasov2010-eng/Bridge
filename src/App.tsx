@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { QRCodeSVG } from "qrcode.react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
@@ -15,7 +16,11 @@ import { loadPreferences, savePreferences } from "./lib/preferences";
 type Page="home"|"send"|"devices"|"clipboard"|"activity"|"settings"|"help";
 type Theme="light"|"dark"|"system";
 type Attachment={id:string;file:File;url:string};
-type SelectedFile={id:string;name:string;sizeLabel:string;path?:string;file?:File};
+type SelectedFile={id:string;name:string;sizeLabel:string;sizeBytes?:number;native?:boolean;file?:File};
+type SelectedFileInfo={id:string;fileName:string;sizeBytes:number};
+type IncomingFileOffer={offerId:string;senderEndpointId:string;fileName:string;sizeBytes:number;sha256:string};
+type TransferProgress={transferId:string;fileName:string;direction:string;transferredBytes:number;totalBytes:number};
+type TransferReceipt={transferId:string;fileName:string;sizeBytes:number;sha256:string;remoteEndpointId:string;completedAtUnix:number};
 type PeerTransportStatus={running:boolean;endpointId:string|null;identityPersisted:boolean};
 type PeerProbe={connected:boolean;remoteEndpointId:string;protocolVersion:number;message:string};
 type PairingInvite={endpointId:string;code:string;expiresInSeconds:number};
@@ -47,6 +52,11 @@ function App(){
  const [sidebarOpen,setSidebarOpen]=useState(!preferences.sidebarCollapsed);
  const [transfers,setTransfers]=useState(initialTransfers);
  const [selectedFiles,setSelectedFiles]=useState<SelectedFile[]>([]);
+ const [sendRecipientId,setSendRecipientId]=useState("");
+ const [sendingFiles,setSendingFiles]=useState(false);
+ const [incomingOffers,setIncomingOffers]=useState<IncomingFileOffer[]>([]);
+ const [incomingOfferBusy,setIncomingOfferBusy]=useState<string|null>(null);
+ const [transferProgress,setTransferProgress]=useState<TransferProgress|null>(null);
  const [clipboardItems,setClipboardItems]=useState(initialClipboard);
  const [clipboardSync,setClipboardSync]=useState(preferences.clipboardSync);
  const [message,setMessage]=useState("");
@@ -80,13 +90,13 @@ function App(){
  useEffect(()=>{invoke<TrustedDevice[]>("get_trusted_devices").then(setTrustedDevices).catch(()=>{});},[]);
  const startPeerTransport=async()=>{
   setPeerBusy(true);setPeerError("");
-  try{const status=await invoke<PeerTransportStatus>("start_peer_transport");setPeerStatus(status);toastMessage("Peer endpoint started. Pairing and file transfer are still in development.");}
+  try{const status=await invoke<PeerTransportStatus>("start_peer_transport");setPeerStatus(status);toastMessage("Bridge peer engine started. You can now pair and transfer files.");}
   catch(error){setPeerError(typeof error==="string"?error:"Native peer networking is available inside the installed Bridge app.");}
   finally{setPeerBusy(false);}
  };
  const stopPeerTransport=async()=>{
   setPeerBusy(true);setPeerError("");
-  try{const status=await invoke<PeerTransportStatus>("stop_peer_transport");setPeerStatus(status);setTrustedDevices([]);setPairingInvite(null);setPeerProbe(null);toastMessage("Peer endpoint stopped. Session pairings were cleared.");}
+  try{const status=await invoke<PeerTransportStatus>("stop_peer_transport");setPeerStatus(status);setTrustedDevices([]);setPairingInvite(null);setPeerProbe(null);setIncomingOffers([]);setTransferProgress(null);setSelectedFiles([]);toastMessage("Peer endpoint stopped. Session pairings and queued file tokens were cleared.");}
   catch(error){setPeerError(typeof error==="string"?error:"Could not stop the native peer endpoint.");}
   finally{setPeerBusy(false);}
  };
@@ -158,11 +168,39 @@ function App(){
  const supportInput=useRef<HTMLInputElement>(null);
  const transition=reducedMotion?{duration:0}:{duration:.34,ease:[.22,1,.36,1] as const};
  const toastMessage=(value:string)=>{setToast(value);window.setTimeout(()=>setToast(""),2600);};
+ useEffect(()=>{
+  let active=true;
+  let unlisteners:Array<()=>void>=[];
+  Promise.all([
+   listen<IncomingFileOffer>("bridge:file-offer",event=>{
+    setIncomingOffers(current=>[event.payload,...current.filter(item=>item.offerId!==event.payload.offerId)]);
+    toastMessage("A device wants to send you a file.");
+   }),
+   listen<TransferProgress>("bridge:file-transfer-progress",event=>setTransferProgress(event.payload)),
+   listen<TransferReceipt>("bridge:file-transfer-complete",event=>{
+    const receipt=event.payload;
+    setTransfers(current=>[{
+     id:receipt.transferId,name:receipt.fileName,size:formatBytes(receipt.sizeBytes),
+     time:new Date(receipt.completedAtUnix*1000).toLocaleString(),state:"Complete",direction:receipt.remoteEndpointId===peerStatus.endpointId?"received":"received"
+    },...current]);
+    setTransferProgress(null);
+    toastMessage("A file was received and verified.");
+   })
+  ]).then(cleanups=>{
+   if(!active)cleanups.forEach(cleanup=>cleanup());
+   else unlisteners=cleanups;
+  }).catch(()=>{});
+  invoke<IncomingFileOffer[]>("get_incoming_file_offers").then(offers=>{
+   if(active)setIncomingOffers(offers);
+  }).catch(()=>{});
+  return ()=>{active=false;unlisteners.forEach(cleanup=>cleanup());};
+ },[]);
+
  const navigate=(next:Page)=>setPage(next);
  const addFiles=(files:FileList|File[])=>{
   const accepted=Array.from(files);if(!accepted.length)return;
   const entries:SelectedFile[]=accepted.map((file,index)=>({
-   id:`browser-${Date.now()}-${index}`,name:file.name,sizeLabel:formatBytes(file.size),file
+   id:`browser-${Date.now()}-${index}`,name:file.name,sizeLabel:formatBytes(file.size),sizeBytes:file.size,native:false,file
   }));
   setSelectedFiles(current=>[...current,...entries]);
   toastMessage(`${accepted.length} file${accepted.length>1?"s":""} selected on this device`);
@@ -170,27 +208,88 @@ function App(){
  };
  const chooseFiles=async()=>{
   try{
-   const result=await openFileDialog({multiple:true,directory:false,title:"Choose files to send"});
-   if(!result)return;
-   const paths=Array.isArray(result)?result:[result];
-   const entries:SelectedFile[]=paths.map((path,index)=>{
-    const normalized=path.replace(/\\/g,"/");
-    let name=normalized.split("/").pop()||"Selected file";
-    try{name=decodeURIComponent(name);}catch{/* Keep the original URI segment. */}
-    if(name.includes(":"))name=name.split(":").pop()||name;
-    return {id:`native-${Date.now()}-${index}`,name,sizeLabel:"Size available after file streaming is connected",path};
-   });
+   const nativeFiles=await invoke<SelectedFileInfo[]>("pick_files_for_transfer");
+   if(!nativeFiles.length)return;
+   const entries:SelectedFile[]=nativeFiles.map(item=>({
+    id:item.id,name:item.fileName,sizeBytes:item.sizeBytes,sizeLabel:formatBytes(item.sizeBytes),native:true
+   }));
    setSelectedFiles(current=>[...current,...entries]);
-   toastMessage(`${entries.length} file${entries.length>1?"s":""} selected`);
+   toastMessage(`${entries.length} file${entries.length>1?"s":""} ready to send`);
    navigate("send");
   }catch{
-   // The native dialog bridge is unavailable in a regular browser: use the
-   // standard browser picker as the web fallback.
-   fileInput.current?.click();
+   try{
+    const result=await openFileDialog({multiple:true,directory:false,title:"Choose files to send"});
+    if(!result){fileInput.current?.click();return;}
+    const paths=Array.isArray(result)?result:[result];
+    const entries:SelectedFile[]=paths.map((path,index)=>{
+     const normalized=path.replace(/\\\\/g,"/");
+     let name=normalized.split("/").pop()||"Selected file";
+     try{name=decodeURIComponent(name);}catch{/* Keep the original URI segment. */}
+     if(name.includes(":"))name=name.split(":").pop()||name;
+     return {id:`browser-dialog-${Date.now()}-${index}`,name,sizeLabel:"Browser selection · not available to native transfer",native:false};
+    });
+    setSelectedFiles(current=>[...current,...entries]);
+    toastMessage(`${entries.length} file${entries.length>1?"s":""} selected in the browser`);
+    navigate("send");
+   }catch{fileInput.current?.click();}
   }
  };
- const removeSelectedFile=(id:string)=>setSelectedFiles(current=>current.filter(item=>item.id!==id));
- const clearSelectedFiles=()=>setSelectedFiles([]);
+ const removeSelectedFile=(id:string)=>{
+  const selected=selectedFiles.find(item=>item.id===id);
+  if(selected?.native)invoke<boolean>("release_selected_file",{selectedFileId:id}).catch(()=>{});
+  setSelectedFiles(current=>current.filter(item=>item.id!==id));
+ };
+ const clearSelectedFiles=()=>{
+  const nativeIds=selectedFiles.filter(item=>item.native).map(item=>item.id);
+  nativeIds.forEach(id=>invoke<boolean>("release_selected_file",{selectedFileId:id}).catch(()=>{}));
+  setSelectedFiles([]);
+ };
+ const sendSelectedFiles=async()=>{
+  if(!selectedFiles.length){toastMessage("Choose one or more files first.");return;}
+  if(!sendRecipientId){toastMessage("Pair another device before sending files.");return;}
+  const nativeFiles=selectedFiles.filter(item=>item.native);
+  if(nativeFiles.length!==selectedFiles.length){
+   toastMessage("Files selected in a web browser cannot be transferred by the native peer engine. Open Bridge on Windows or Android.");
+   return;
+  }
+  setSendingFiles(true);
+  let completed=0;
+  try{
+   for(const item of nativeFiles){
+    const receipt=await invoke<TransferReceipt>("send_file_to_peer",{
+     remoteEndpointId:sendRecipientId,
+     selectedFileId:item.id
+    });
+    setTransfers(current=>[{
+     id:receipt.transferId,name:receipt.fileName,size:formatBytes(receipt.sizeBytes),
+     time:new Date(receipt.completedAtUnix*1000).toLocaleString(),state:"Complete",direction:"sent"
+    },...current]);
+    setSelectedFiles(current=>current.filter(file=>file.id!==item.id));
+    completed+=1;
+   }
+   setTransferProgress(null);
+   toastMessage(`${completed} file${completed===1?"":"s"} sent and verified.`);
+  }catch(error){
+   toastMessage(typeof error==="string"?error:"File transfer failed. The other device may have declined or disconnected.");
+  }finally{setSendingFiles(false);}
+ };
+ const acceptIncomingOffer=async(offer:IncomingFileOffer)=>{
+  setIncomingOfferBusy(offer.offerId);
+  try{
+   const accepted=await invoke<boolean>("accept_file_offer",{offerId:offer.offerId,suggestedFileName:offer.fileName});
+   setIncomingOffers(current=>current.filter(item=>item.offerId!==offer.offerId));
+   if(!accepted)toastMessage("File offer declined or cancelled.");
+  }catch(error){toastMessage(typeof error==="string"?error:"Could not accept this file offer.");}
+  finally{setIncomingOfferBusy(null);}
+ };
+ const rejectIncomingOffer=async(offerId:string)=>{
+  try{
+   await invoke<boolean>("reject_file_offer",{offerId});
+   setIncomingOffers(current=>current.filter(item=>item.offerId!==offerId));
+   toastMessage("Incoming file declined.");
+  }catch(error){toastMessage(typeof error==="string"?error:"Could not decline this file offer.");}
+ };
+
  const onDrop=(event:DragEvent<HTMLDivElement>)=>{event.preventDefault();setDragging(false);addFiles(event.dataTransfer.files);};
  const handleScreenshots=(event:ChangeEvent<HTMLInputElement>)=>{
   const selected=Array.from(event.target.files??[]);const valid:Attachment[]=[];const errors:string[]=[];
@@ -228,8 +327,8 @@ function App(){
    <header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" onClick={()=>setSidebarOpen(v=>!v)} aria-label="Toggle navigation"><Menu size={19}/></button><span className="breadcrumb-root">Bridge</span><ChevronRight size={14} className="crumb-chevron"/><span className="breadcrumb-current">{pageTitle[page]}</span></div><div className="topbar-actions"><div className="connection-pill"><span className="status-dot"/><span>2 devices</span></div><button className="icon-button" aria-label="Open activity" onClick={()=>navigate("activity")}><Activity size={17}/></button><button className="avatar-button" aria-label="Local profile">A</button></div></header>
    <div className="content-scroll"><AnimatePresence mode="wait" initial={false}><motion.div key={page} className="page-content" initial={reducedMotion?false:{opacity:0,y:9}} animate={{opacity:1,y:0}} exit={reducedMotion?undefined:{opacity:0,y:-5}} transition={transition}>
     {page==="home"&&<HomePage transfers={transfers} onNavigate={navigate} onChoose={chooseFiles} onDrop={onDrop} dragging={dragging} setDragging={setDragging}/>}
-    {page==="send"&&<SendPage transfers={transfers} selectedFiles={selectedFiles} onRemoveFile={removeSelectedFile} onClearFiles={clearSelectedFiles} sendText={sendText} setSendText={setSendText} onChoose={chooseFiles} onDrop={onDrop} dragging={dragging} setDragging={setDragging} onCopy={()=>{if(!sendText.trim())return;navigator.clipboard?.writeText(sendText);toastMessage("Text copied to clipboard");}}/>}
-    {page==="devices"&&<DevicesPage peerStatus={peerStatus} peerBusy={peerBusy} peerError={peerError} onStartPeer={startPeerTransport} onStopPeer={stopPeerTransport} peerTargetId={peerTargetId} setPeerTargetId={setPeerTargetId} peerProbe={peerProbe} peerProbeBusy={peerProbeBusy} peerProbeError={peerProbeError} onProbePeer={probePeerEndpoint} onCopyPeerId={copyLocalPeerId} pairingInvite={pairingInvite} pairingInviteBusy={pairingInviteBusy} onCreatePairingInvite={createPairingInvite} onCopyPairingCode={copyPairingCode} pairingDeviceId={pairingDeviceId} setPairingDeviceId={setPairingDeviceId} pairingCode={pairingCode} setPairingCode={setPairingCode} pairingBusy={pairingBusy} pairingError={pairingError} onPairWithDevice={pairWithDevice} trustedDevices={trustedDevices} trustedBusy={trustedBusy} onRefreshTrustedDevices={refreshTrustedDevices} onRemoveTrustedDevice={removeTrustedDevice}/>}
+    {page==="send"&&<SendPage transfers={transfers} selectedFiles={selectedFiles} onRemoveFile={removeSelectedFile} onClearFiles={clearSelectedFiles} trustedDevices={trustedDevices} recipientId={sendRecipientId} setRecipientId={setSendRecipientId} sendingFiles={sendingFiles} transferProgress={transferProgress} onSendFiles={sendSelectedFiles} sendText={sendText} setSendText={setSendText} onChoose={chooseFiles} onDrop={onDrop} dragging={dragging} setDragging={setDragging} onCopy={()=>{if(!sendText.trim())return;navigator.clipboard?.writeText(sendText);toastMessage("Text copied to clipboard");}}/>}
+    {page==="devices"&&<DevicesPage peerStatus={peerStatus} peerBusy={peerBusy} peerError={peerError} onStartPeer={startPeerTransport} onStopPeer={stopPeerTransport} peerTargetId={peerTargetId} setPeerTargetId={setPeerTargetId} peerProbe={peerProbe} peerProbeBusy={peerProbeBusy} peerProbeError={peerProbeError} onProbePeer={probePeerEndpoint} onCopyPeerId={copyLocalPeerId} pairingInvite={pairingInvite} pairingInviteBusy={pairingInviteBusy} onCreatePairingInvite={createPairingInvite} onCopyPairingCode={copyPairingCode} pairingDeviceId={pairingDeviceId} setPairingDeviceId={setPairingDeviceId} pairingCode={pairingCode} setPairingCode={setPairingCode} pairingBusy={pairingBusy} pairingError={pairingError} onPairWithDevice={pairWithDevice} trustedDevices={trustedDevices} trustedBusy={trustedBusy} onRefreshTrustedDevices={refreshTrustedDevices} onRemoveTrustedDevice={removeTrustedDevice} incomingOffers={incomingOffers} incomingOfferBusy={incomingOfferBusy} onAcceptIncoming={acceptIncomingOffer} onRejectIncoming={rejectIncomingOffer}/>}
     {page==="clipboard"&&<ClipboardPage items={clipboardItems} enabled={clipboardSync} onToggle={()=>setClipboardSync(v=>!v)} onClear={()=>setClipboardItems([])} onCopy={value=>{navigator.clipboard?.writeText(value);toastMessage("Copied");}}/>}
     {page==="activity"&&<ActivityPage transfers={transfers}/>}
     {page==="settings"&&<SettingsPage theme={theme} setTheme={value=>setTheme(value)} reducedMotion={reducedMotion} setReducedMotion={setReducedMotion} clipboardSync={clipboardSync} setClipboardSync={setClipboardSync} onSave={()=>{setSettingsSaved(true);toastMessage("Preferences saved on this device");}} settingsSaved={settingsSaved}/>}
@@ -266,23 +365,28 @@ function HomePage({transfers,onNavigate,onChoose,onDrop,dragging,setDragging}:{t
  </div>;
 }
 
-function SendPage({transfers,selectedFiles,onRemoveFile,onClearFiles,sendText,setSendText,onChoose,onDrop,dragging,setDragging,onCopy}:{transfers:Transfer[];selectedFiles:SelectedFile[];onRemoveFile:(id:string)=>void;onClearFiles:()=>void;sendText:string;setSendText:(v:string)=>void;onChoose:()=>void;onDrop:(e:DragEvent<HTMLDivElement>)=>void;dragging:boolean;setDragging:(v:boolean)=>void;onCopy:()=>void}){
+function SendPage({transfers,selectedFiles,onRemoveFile,onClearFiles,trustedDevices,recipientId,setRecipientId,sendingFiles,transferProgress,onSendFiles,sendText,setSendText,onChoose,onDrop,dragging,setDragging,onCopy}:{transfers:Transfer[];selectedFiles:SelectedFile[];onRemoveFile:(id:string)=>void;onClearFiles:()=>void;trustedDevices:TrustedDevice[];recipientId:string;setRecipientId:(v:string)=>void;sendingFiles:boolean;transferProgress:TransferProgress|null;onSendFiles:()=>void;sendText:string;setSendText:(v:string)=>void;onChoose:()=>void;onDrop:(e:DragEvent<HTMLDivElement>)=>void;dragging:boolean;setDragging:(v:boolean)=>void;onCopy:()=>void}){
  return <div className="page-stack narrow-stack"><PageHeading eyebrow="SEND TO YOUR DEVICES" title="A little less friction." subtitle="Choose what you'd like to move, then pick where it should go."/>
-  <section className="surface-card send-recipient"><div className="send-recipient-label"><span>Send to</span><span className="secure-label"><LockKeyhole size={12}/> Private pairing · UI preview</span></div><div className="recipient-select"><div className="device-icon-wrap phone"><Smartphone size={19}/></div><div><strong>Android phone</strong><small>Example device · Not paired yet</small></div><ChevronDown size={16}/></div></section>
-  <div className={cx("dropzone send-dropzone",dragging&&"dropzone-active")} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={onDrop}><div className="dropzone-icon"><Files size={22}/></div><h3>Drop files to send</h3><p>Documents, photos, videos and more.</p><button className="button button-primary" onClick={onChoose}><FolderOpen size={16}/> Browse files</button><span className="dropzone-footnote">Native file picker works on Windows and Android. Actual sending is the next engine milestone.</span></div>
-  {selectedFiles.length>0&&<section className="surface-card selected-files-card"><div className="section-title"><h2>Selected files</h2><button className="text-button" onClick={onClearFiles}>Clear all <X size={13}/></button></div><div className="selected-files-list">{selectedFiles.map(item=><div className="selected-file-row" key={item.id}><div className="file-icon"><File size={16}/></div><div><strong>{item.name}</strong><span>{item.sizeLabel}</span></div><button className="icon-button" onClick={()=>onRemoveFile(item.id)} aria-label={`Remove ${item.name}`}><X size={14}/></button></div>)}</div><p className="selected-files-note"><LockKeyhole size={13}/> Files are selected locally. No file contents have been uploaded or transmitted yet.</p></section>}
+  <section className="surface-card send-recipient"><div className="send-recipient-label"><span>Send to</span><span className="secure-label"><LockKeyhole size={12}/> Paired devices only</span></div><div className="recipient-select"><div className="device-icon-wrap phone"><Smartphone size={19}/></div><div className="recipient-select-copy"><strong>Recipient device</strong><select value={recipientId} onChange={e=>setRecipientId(e.target.value)} disabled={!trustedDevices.length}><option value="">{trustedDevices.length?"Choose a paired device":"No paired devices yet"}</option>{trustedDevices.map(device=><option key={device.endpointId} value={device.endpointId}>{device.endpointId.slice(0,16)}…</option>)}</select></div></div></section>
+  <div className={cx("dropzone send-dropzone",dragging&&"dropzone-active")} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={onDrop}><div className="dropzone-icon"><Files size={22}/></div><h3>Drop files to send</h3><p>Documents, photos, videos and more.</p><button className="button button-primary" onClick={onChoose}><FolderOpen size={16}/> Browse files</button><span className="dropzone-footnote">Native file picker · encrypted peer transfer · SHA-256 verification.</span></div>
+  {selectedFiles.length>0&&<section className="surface-card selected-files-card"><div className="section-title"><h2>Selected files</h2><button className="text-button" onClick={onClearFiles}>Clear all <X size={13}/></button></div><div className="selected-files-list">{selectedFiles.map(item=><div className="selected-file-row" key={item.id}><div className="file-icon"><File size={16}/></div><div><strong>{item.name}</strong><span>{item.sizeLabel}</span></div><button className="icon-button" onClick={()=>onRemoveFile(item.id)} aria-label={`Remove ${item.name}`}><X size={14}/></button></div>)}</div><div className="selected-files-footer"><p className="selected-files-note"><LockKeyhole size={13}/> Files remain on this device until the paired recipient accepts the offer.</p><button className="button button-primary" onClick={onSendFiles} disabled={!selectedFiles.some(item=>item.native)||!recipientId||sendingFiles}>{sendingFiles?"Sending…":`Send ${selectedFiles.length} file${selectedFiles.length===1?"":"s"}` } <ArrowUpRight size={14}/></button></div></section>}
+  {transferProgress&&<section className="surface-card transfer-progress-card"><div className="transfer-progress-heading"><strong>{transferProgress.direction==="sent"?"Sending":"Receiving"} · {transferProgress.fileName}</strong><span>{formatBytes(transferProgress.transferredBytes)} / {formatBytes(transferProgress.totalBytes)}</span></div><div className="transfer-progress-track"><i style={{width:`${transferProgress.totalBytes?Math.min(100,transferProgress.transferredBytes/transferProgress.totalBytes*100):0}%`}}/></div></section>}
   <section className="surface-card send-text-card"><div className="send-text-head"><div><h3>Send a message</h3><p>Text, links, snippets — anything you can copy.</p></div><div className="mini-icon"><MessageCircle size={17}/></div></div><textarea value={sendText} onChange={e=>setSendText(e.target.value)} placeholder="Paste a link or write something short…" rows={4}/><div className="send-text-footer"><span>{sendText.length} characters</span><button className="button button-secondary" onClick={onCopy} disabled={!sendText.trim()}><Copy size={15}/> Copy text</button></div></section>
   <section className="surface-card queued-card"><SectionTitle title="Transfer queue" action={<span className="muted-count">{transfers.filter(item=>item.state==="Waiting").length} waiting</span>}/><div className="activity-list">{transfers.some(item=>item.state==="Waiting")?transfers.filter(item=>item.state==="Waiting").map(item=><ActivityRow key={item.id} item={item}/>):<div className="empty-inline"><CheckCheck size={18}/> Nothing waiting. You're all caught up.</div>}</div></section>
  </div>;
 }
 
-function DevicesPage({peerStatus,peerBusy,peerError,onStartPeer,onStopPeer,peerTargetId,setPeerTargetId,peerProbe,peerProbeBusy,peerProbeError,onProbePeer,onCopyPeerId,pairingInvite,pairingInviteBusy,onCreatePairingInvite,onCopyPairingCode,pairingDeviceId,setPairingDeviceId,pairingCode,setPairingCode,pairingBusy,pairingError,onPairWithDevice,trustedDevices,trustedBusy,onRefreshTrustedDevices,onRemoveTrustedDevice}:{peerStatus:PeerTransportStatus;peerBusy:boolean;peerError:string;onStartPeer:()=>void;onStopPeer:()=>void;peerTargetId:string;setPeerTargetId:(v:string)=>void;peerProbe:PeerProbe|null;peerProbeBusy:boolean;peerProbeError:string;onProbePeer:()=>void;onCopyPeerId:()=>void;pairingInvite:PairingInvite|null;pairingInviteBusy:boolean;onCreatePairingInvite:()=>void;onCopyPairingCode:()=>void;pairingDeviceId:string;setPairingDeviceId:(v:string)=>void;pairingCode:string;setPairingCode:(v:string)=>void;pairingBusy:boolean;pairingError:string;onPairWithDevice:()=>void;trustedDevices:TrustedDevice[];trustedBusy:boolean;onRefreshTrustedDevices:()=>void;onRemoveTrustedDevice:(id:string)=>void}){
- return <div className="page-stack"><PageHeading eyebrow="TRUSTED CONNECTIONS" title="Your devices." subtitle="Create a one-time invite, verify the other endpoint, and pair devices for this app session."/>
-  <div className="device-list-card surface-card"><DeviceRow icon={<Monitor size={20}/>} name="This device" description="Current Bridge installation" current/><div className="device-security-foot"><ShieldCheck size={16}/><span>Pairing authenticates the peer endpoint over an encrypted iroh connection. Session approvals are cleared when the network engine stops.</span></div></div>
+function DevicesPage({peerStatus,peerBusy,peerError,onStartPeer,onStopPeer,peerTargetId,setPeerTargetId,peerProbe,peerProbeBusy,peerProbeError,onProbePeer,onCopyPeerId,pairingInvite,pairingInviteBusy,onCreatePairingInvite,onCopyPairingCode,pairingDeviceId,setPairingDeviceId,pairingCode,setPairingCode,pairingBusy,pairingError,onPairWithDevice,trustedDevices,trustedBusy,onRefreshTrustedDevices,onRemoveTrustedDevice,incomingOffers,incomingOfferBusy,onAcceptIncoming,onRejectIncoming}:{peerStatus:PeerTransportStatus;peerBusy:boolean;peerError:string;onStartPeer:()=>void;onStopPeer:()=>void;peerTargetId:string;setPeerTargetId:(v:string)=>void;peerProbe:PeerProbe|null;peerProbeBusy:boolean;peerProbeError:string;onProbePeer:()=>void;onCopyPeerId:()=>void;pairingInvite:PairingInvite|null;pairingInviteBusy:boolean;onCreatePairingInvite:()=>void;onCopyPairingCode:()=>void;pairingDeviceId:string;setPairingDeviceId:(v:string)=>void;pairingCode:string;setPairingCode:(v:string)=>void;pairingBusy:boolean;pairingError:string;onPairWithDevice:()=>void;trustedDevices:TrustedDevice[];trustedBusy:boolean;onRefreshTrustedDevices:()=>void;onRemoveTrustedDevice:(id:string)=>void;incomingOffers:IncomingFileOffer[];incomingOfferBusy:string|null;onAcceptIncoming:(offer:IncomingFileOffer)=>void;onRejectIncoming:(id:string)=>void}){
+ return <div className="page-stack"><PageHeading eyebrow="TRUSTED CONNECTIONS" title="Your devices." subtitle="Pair devices, verify their encrypted identity, and choose which incoming files to accept."/>
+  <div className="device-list-card surface-card"><DeviceRow icon={<Monitor size={20}/>} name="This device" description="Current Bridge installation" current/><div className="device-security-foot"><ShieldCheck size={16}/><span>Only paired endpoint IDs can offer a file. Every incoming file requires your approval and a destination you choose.</span></div></div>
   <PeerTransportCard status={peerStatus} busy={peerBusy} error={peerError} onStart={onStartPeer} onStop={onStopPeer} onCopyPeerId={onCopyPeerId} peerTargetId={peerTargetId} setPeerTargetId={setPeerTargetId} peerProbe={peerProbe} peerProbeBusy={peerProbeBusy} peerProbeError={peerProbeError} onProbePeer={onProbePeer}/>
   <PairingPanel running={peerStatus.running} invite={pairingInvite} inviteBusy={pairingInviteBusy} onCreateInvite={onCreatePairingInvite} onCopyCode={onCopyPairingCode} deviceId={pairingDeviceId} setDeviceId={setPairingDeviceId} code={pairingCode} setCode={setPairingCode} busy={pairingBusy} error={pairingError} onPair={onPairWithDevice}/>
+  <IncomingOffersPanel offers={incomingOffers} busyOfferId={incomingOfferBusy} onAccept={onAcceptIncoming} onReject={onRejectIncoming}/>
   <TrustedDevicesPanel devices={trustedDevices} busy={trustedBusy} onRefresh={onRefreshTrustedDevices} onRemove={onRemoveTrustedDevice}/>
  </div>;
+}
+function IncomingOffersPanel({offers,busyOfferId,onAccept,onReject}:{offers:IncomingFileOffer[];busyOfferId:string|null;onAccept:(offer:IncomingFileOffer)=>void;onReject:(id:string)=>void}){
+ return <section className="surface-card incoming-offers-panel"><div className="section-title"><h2>Incoming files</h2><span className="muted-count">{offers.length} awaiting your decision</span></div>{offers.length?offers.map(offer=><div className="incoming-offer-row" key={offer.offerId}><div className="file-icon"><File size={17}/></div><div className="incoming-offer-info"><strong>{offer.fileName}</strong><span>{formatBytes(offer.sizeBytes)} · from {offer.senderEndpointId.slice(0,14)}…</span><small>SHA-256 verification runs before saving.</small></div><button className="button button-secondary" onClick={()=>onReject(offer.offerId)} disabled={busyOfferId===offer.offerId}>Decline</button><button className="button button-primary" onClick={()=>onAccept(offer)} disabled={busyOfferId===offer.offerId}>{busyOfferId===offer.offerId?"Opening…":"Accept"}</button></div>):<div className="empty-inline"><ShieldCheck size={17}/> No incoming files. Requests from paired devices will appear here.</div>}</section>;
 }
 function PairingPanel({running,invite,inviteBusy,onCreateInvite,onCopyCode,deviceId,setDeviceId,code,setCode,busy,error,onPair}:{running:boolean;invite:PairingInvite|null;inviteBusy:boolean;onCreateInvite:()=>void;onCopyCode:()=>void;deviceId:string;setDeviceId:(v:string)=>void;code:string;setCode:(v:string)=>void;busy:boolean;error:string;onPair:()=>void}){
  const inviteLink=invite?`bridge://pair?endpointId=${encodeURIComponent(invite.endpointId)}&code=${invite.code}`:"";
