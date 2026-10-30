@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    io::{Read, Seek, SeekFrom},
-    path::{Path, PathBuf},
+    io::SeekFrom,
+    path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -13,7 +13,7 @@ use subtle::ConstantTimeEq;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_fs::{FilePath, FsExt, OpenOptions as FsOpenOptions};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, sync::{oneshot, Semaphore}};
+use tokio::{io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt}, sync::{oneshot, Semaphore}};
 use uuid::Uuid;
 
 pub const BRIDGE_ALPN: &[u8] = b"app.bridge.control/1";
@@ -567,7 +567,7 @@ impl PeerTransport {
         offer_send.finish()
             .map_err(|error| format!("Could not finish the file offer: {error}"))?;
 
-        let (mut decision_send, mut decision_recv) = tokio::time::timeout(
+        let (_decision_send, mut decision_recv) = tokio::time::timeout(
             FILE_OFFER_TTL,
             connection.accept_bi(),
         )
@@ -595,9 +595,6 @@ impl PeerTransport {
             });
         }
 
-        // The receive decision is fully consumed; this variable exists only to
-        // make the stream lifecycle explicit and avoid accidentally reusing it.
-        let _ = &mut decision_send;
         let mut data_send = connection.open_uni().await
             .map_err(|error| format!("Could not open the file data stream: {error}"))?;
         let mut sent_bytes = 0u64;
@@ -621,7 +618,7 @@ impl PeerTransport {
         data_send.finish()
             .map_err(|error| format!("Could not finish sending {}: {error}", selected.file_name))?;
 
-        let (mut result_send, mut result_recv) = tokio::time::timeout(
+        let (_result_send, mut result_recv) = tokio::time::timeout(
             STREAM_IDLE_TIMEOUT,
             connection.accept_bi(),
         )
@@ -635,7 +632,6 @@ impl PeerTransport {
         let result: FileTransferResult = serde_json::from_slice(&result_bytes)
             .map_err(|_| "The receiver returned an invalid transfer result.".to_string())?;
 
-        let _ = &mut result_send;
         if result.message_type != "bridge.file_result"
             || result.protocol_version != PROTOCOL_VERSION
             || result.transfer_id != transfer_id {
@@ -846,7 +842,7 @@ async fn run_accept_loop(
                 };
                 let size_bytes = request.size_bytes.unwrap_or(0);
                 let sha256 = request.sha256.unwrap_or_default();
-                if transfer_id.is_empty() || size_bytes == 0 || size_bytes > MAX_FILE_BYTES || !is_sha256(&sha256) {
+                if Uuid::parse_str(&transfer_id).is_err() || size_bytes > MAX_FILE_BYTES || !is_sha256(&sha256) {
                     send_file_decision(&connection, &transfer_id, false, "The offered file metadata is invalid or exceeds the 5 GiB limit.").await;
                     return;
                 }
@@ -1044,7 +1040,8 @@ async fn receive_file_payload(
         .map_err(|error| format!("Could not locate Bridge's temporary storage: {error}"))?;
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("Could not create Bridge's temporary storage: {error}"))?;
-    let temp_path: PathBuf = cache_dir.join(format!("bridge-{transfer_id}.part"));
+    let staging_id = Uuid::new_v4();
+    let temp_path: PathBuf = cache_dir.join(format!("bridge-{staging_id}.part"));
     let temp_file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
