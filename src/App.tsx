@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { QRCodeSVG } from "qrcode.react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
  Activity, ArrowLeftRight, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronRight,
@@ -253,17 +254,29 @@ function DevicesPage({peerStatus,peerBusy,peerError,onStartPeer,onStopPeer,peerT
  </div>;
 }
 function PairingPanel({running,invite,inviteBusy,onCreateInvite,onCopyCode,deviceId,setDeviceId,code,setCode,busy,error,onPair}:{running:boolean;invite:PairingInvite|null;inviteBusy:boolean;onCreateInvite:()=>void;onCopyCode:()=>void;deviceId:string;setDeviceId:(v:string)=>void;code:string;setCode:(v:string)=>void;busy:boolean;error:string;onPair:()=>void}){
+ const inviteLink=invite?`bridge://pair?endpointId=${encodeURIComponent(invite.endpointId)}&code=${invite.code}`:"";
+ const handleInviteInput=(value:string)=>{
+  try{
+   const url=new URL(value);
+   if(url.protocol==="bridge:"&&url.hostname==="pair"){
+    setDeviceId(url.searchParams.get("endpointId")??"");
+    setCode((url.searchParams.get("code")??"").replace(/[^0-9]/g,"").slice(0,6));
+    return;
+   }
+  }catch{/* A plain peer ID is also valid input. */}
+  setDeviceId(value);
+ };
  return <section className="surface-card pairing-panel">
-  <div className="pairing-panel-head"><div><div className="eyebrow">ONE-TIME PAIRING</div><h2>Connect your own devices.</h2><p>Use a short-lived code so each device owner explicitly starts the connection.</p></div><div className="pairing-panel-icon"><QrCode size={19}/></div></div>
+  <div className="pairing-panel-head"><div><div className="eyebrow">ONE-TIME PAIRING</div><h2>Connect your own devices.</h2><p>Scan or share a short-lived invitation. Both devices must be open and online.</p></div><div className="pairing-panel-icon"><QrCode size={19}/></div></div>
   <div className="pairing-columns">
-   <div className="pairing-invite-side"><h3>Invite this device</h3><p>Generate a code here, then enter it on the other Bridge device along with this device ID.</p>
-    {invite?<div className="pairing-code-card"><span>ONE-TIME CODE · EXPIRES IN 3 MINUTES</span><strong>{invite.code.slice(0,3)} {invite.code.slice(3)}</strong><button className="button button-secondary" onClick={onCopyCode}><Copy size={14}/> Copy code</button></div>:<div className="pairing-code-empty"><LockKeyhole size={17}/><span>Your invite code will appear here.</span></div>}
-    <button className="button button-primary" onClick={onCreateInvite} disabled={!running||inviteBusy}><KeyRound size={15}/>{inviteBusy?"Creating invite…":invite?"Generate a new code":"Create pairing code"}</button>
+   <div className="pairing-invite-side"><h3>Invite this device</h3><p>Generate a three-minute invite. The QR contains this device ID and a one-use code.</p>
+    {invite?<div className="pairing-code-card pairing-code-card-live"><div className="pairing-qr"><QRCodeSVG value={inviteLink} size={132} level="M" marginSize={4} title="Bridge one-time pairing invitation"/></div><span>ONE-TIME CODE · EXPIRES IN 3 MINUTES</span><strong>{invite.code.slice(0,3)} {invite.code.slice(3)}</strong><button className="button button-secondary" onClick={onCopyCode}><Copy size={14}/> Copy code</button></div>:<div className="pairing-code-empty"><LockKeyhole size={17}/><span>Your invite QR and code will appear here.</span></div>}
+    <button className="button button-primary" onClick={onCreateInvite} disabled={!running||inviteBusy}><KeyRound size={15}/>{inviteBusy?"Creating invite…":invite?"Generate a new code":"Create pairing invite"}</button>
    </div>
-   <div className="pairing-join-side"><h3>Join another device</h3><label htmlFor="pair-peer-id">Other device ID</label><input id="pair-peer-id" value={deviceId} onChange={e=>setDeviceId(e.target.value)} placeholder="Paste the peer endpoint ID" spellCheck={false}/><label htmlFor="pair-code">Six-digit invite code</label><input id="pair-code" value={code} onChange={e=>setCode(e.target.value.replace(/[^0-9]/g,"").slice(0,6))} placeholder="000000" inputMode="numeric" autoComplete="one-time-code" maxLength={6}/><button className="button button-primary" onClick={onPair} disabled={!running||busy||!deviceId.trim()||code.length!==6}>{busy?"Pairing…":"Pair devices"}</button><small>Only enter a code that the other device owner just generated and shared with you.</small></div>
+   <div className="pairing-join-side"><h3>Join another device</h3><label htmlFor="pair-peer-id">Scan QR or paste an invite / device ID</label><input id="pair-peer-id" value={deviceId} onChange={e=>handleInviteInput(e.target.value)} placeholder="Paste Bridge invite link or endpoint ID" spellCheck={false}/><label htmlFor="pair-code">Six-digit invite code</label><input id="pair-code" value={code} onChange={e=>setCode(e.target.value.replace(/[^0-9]/g,"").slice(0,6))} placeholder="000000" inputMode="numeric" autoComplete="one-time-code" maxLength={6}/><button className="button button-primary" onClick={onPair} disabled={!running||busy||!deviceId.trim()||code.length!==6}>{busy?"Pairing…":"Pair devices"}</button><small>After scanning the QR with another camera, paste the copied Bridge invite link here. You can also enter the endpoint ID and code separately.</small></div>
   </div>
   {error&&<p className="peer-error">{error}</p>}
-  <p className="pairing-session-note"><ShieldCheck size={13}/> Paired devices are trusted for this session only. Persistent identity and encrypted device storage are the next security milestone.</p>
+  <p className="pairing-session-note"><ShieldCheck size={13}/> Pairing is authenticated and one-use, but trusted devices are kept in memory only until the peer engine stops. Persistent identity storage is still required.</p>
  </section>;
 }
 function TrustedDevicesPanel({devices,busy,onRefresh,onRemove}:{devices:TrustedDevice[];busy:boolean;onRefresh:()=>void;onRemove:(id:string)=>void}){
