@@ -353,3 +353,5 @@ function HelpPage({message,setMessage,attachments,onAttach,onRemoveAttachment,on
   </div>
  </div>;
 }
+
+export default App;
