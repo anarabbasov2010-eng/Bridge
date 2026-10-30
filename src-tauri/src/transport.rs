@@ -201,6 +201,7 @@ impl PeerTransport {
 
 async fn run_accept_loop(endpoint: Endpoint) {
     while let Some(incoming) = endpoint.accept().await {
+        let local_endpoint_id = endpoint.id().to_string();
         tokio::spawn(async move {
             let connection = match incoming.await {
                 Ok(connection) => connection,
@@ -226,14 +227,14 @@ async fn run_accept_loop(endpoint: Endpoint) {
                     ControlResponse {
                         message_type: "bridge.hello_ack".to_string(),
                         protocol_version: PROTOCOL_VERSION,
-                        endpoint_id: endpoint.id().to_string(),
+                        endpoint_id: local_endpoint_id.clone(),
                         message: "Bridge peer endpoint is reachable.".to_string(),
                     }
                 }
                 _ => ControlResponse {
                     message_type: "bridge.error".to_string(),
                     protocol_version: PROTOCOL_VERSION,
-                    endpoint_id: endpoint.id().to_string(),
+                    endpoint_id: local_endpoint_id.clone(),
                     message: "Unsupported or malformed Bridge control request.".to_string(),
                 },
             };
