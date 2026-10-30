@@ -12,7 +12,8 @@
 
 ## Milestone 1 — local native experience
 - [ ] Persist theme, motion and preferences safely
-- [ ] Native file picker and destination picker
+- [x] Native multi-file picker on Windows and Android, with browser fallback
+- [ ] Safe destination picker and incoming-file destination handling
 - [ ] Build and smoke-test Windows NSIS installer
 - [ ] Initialize Android project and build debug APK
 - [ ] Add device identity storage using platform secure storage

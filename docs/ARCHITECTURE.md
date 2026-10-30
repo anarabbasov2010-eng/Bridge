@@ -4,7 +4,7 @@
 Bridge is a cross-device utility, not a cloud drive. The first product boundary is Windows + Android, sharing one React UI and a Rust native core through Tauri 2.
 
 ## Layers
-1. **Presentation** — React + TypeScript. Navigation, transfer queue views, pairing screens, clipboard preferences, settings, FAQ and support.
+1. **Presentation** — React + TypeScript. Navigation, native file selection (Tauri Dialog on Windows and Android; browser fallback on web), selected-file review, pairing screens, clipboard preferences, settings, FAQ and support.
 2. **Native shell** — Tauri 2. Platform-specific windows, file access, Android packaging and OS integrations.
 3. **Identity and pairing** — local device identity, short-lived pairing handshake, user confirmation, trusted-device registry and revocation.
 4. **Transport** — iroh / QUIC peer connectivity. Direct path is preferred; relay-assisted connection establishment handles networks where direct connectivity fails. Relay is not file storage.

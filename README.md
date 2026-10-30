@@ -18,10 +18,11 @@ Bridge is a free, privacy-first cross-device companion for Windows and Android. 
 
 - **Desktop + Android:** Tauri 2 with a Rust core.
 - **UI:** React, TypeScript, Vite, Framer Motion, Lucide.
+- **Native file selection:** Tauri Dialog plugin for Windows and Android, with a browser picker fallback.
 - **Peer transport:** iroh / QUIC, with relay-assisted connection establishment when direct connectivity is unavailable.
 - **Builds:** GitHub Actions for Windows and Android.
 
-The app includes the React UI foundation, local demo interactions, support validation, a Tauri shell, a native iroh peer endpoint, encrypted connectivity checks, and one-time QR / six-digit pairing invitations. Pair approvals and the trusted-device list currently last only for the running app session. Persistent device identity, encrypted on-disk trusted-device storage, actual file transfer and OS clipboard integration remain separate milestones.
+The app includes the React UI foundation, local demo interactions, support validation, native Windows / Android file selection, a native iroh peer endpoint, encrypted connectivity checks, and one-time QR / six-digit pairing invitations. Selected files remain local; file streaming is not connected yet. Pair approvals and the trusted-device list currently last only for the running app session. Persistent device identity, encrypted on-disk trusted-device storage, actual file transfer and OS clipboard integration remain separate milestones.
 
 ## Development
 
