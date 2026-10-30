@@ -24,7 +24,7 @@ fn get_runtime_info() -> RuntimeInfo {
         } else {
             "other"
         },
-        transport_ready: false,
+        transport_ready: true,
         pairing_ready: false,
     }
 }
