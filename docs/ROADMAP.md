@@ -13,7 +13,8 @@
 ## Milestone 1 — local native experience
 - [ ] Persist theme, motion and preferences safely
 - [x] Native multi-file picker on Windows and Android, with browser fallback
-- [ ] Safe destination picker and incoming-file destination handling
+- [x] Native destination picker before accepting an incoming file
+- [ ] Test destination overwrite and permission behavior across Android document providers
 - [ ] Build and smoke-test Windows NSIS installer
 - [ ] Initialize Android project and build debug APK
 - [ ] Add device identity storage using platform secure storage
@@ -30,11 +31,11 @@
 - [ ] Security review of handshake and threat model
 
 ## Milestone 3 — real transfers
-- [ ] Chunked streaming and bounded backpressure
-- [ ] SHA-256 integrity verification
+- [x] Bounded 128 KiB chunk streaming over QUIC
+- [x] SHA-256 verification before saving received data
 - [ ] Pause / resume / cancel
-- [ ] Atomic file finalization and collision resolution
-- [ ] Large-file, interruption and network-switch tests
+- [ ] Atomic file finalization and collision resolution across desktop paths and Android content providers
+- [ ] Large-file, interruption, retry and network-switch tests
 - [ ] Android background transfer behavior and notification UX
 
 ## Milestone 4 — quality and ecosystem

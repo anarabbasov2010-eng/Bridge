@@ -22,7 +22,15 @@ Bridge is a free, privacy-first cross-device companion for Windows and Android. 
 - **Peer transport:** iroh / QUIC, with relay-assisted connection establishment when direct connectivity is unavailable.
 - **Builds:** GitHub Actions for Windows and Android.
 
-The app includes the React UI foundation, local demo interactions, support validation, native Windows / Android file selection, a native iroh peer endpoint, encrypted connectivity checks, and one-time QR / six-digit pairing invitations. Selected files remain local; file streaming is not connected yet. Pair approvals and the trusted-device list currently last only for the running app session. Persistent device identity, encrypted on-disk trusted-device storage, actual file transfer and OS clipboard integration remain separate milestones.
+The app currently includes:
+- React UI for Windows and Android, with responsive desktop and mobile layouts.
+- Native iroh / QUIC endpoint, encrypted peer identity checks and one-time QR / six-digit pairing invitations.
+- Native file selection on Windows and Android. Selected files remain local until the recipient accepts an incoming offer.
+- An initial peer-to-peer file streaming path: receiver approval, bounded 128 KiB chunks, a 5 GiB per-file limit, progress events, temporary cache staging and SHA-256 verification before received data is copied to the selected destination.
+- Incoming offer review, recipient selection, transfer progress and verified transfer history.
+- FAQ and support UI with up to five screenshot previews and an 800-Unicode-character message limit.
+
+**Current preview limitations:** this is an early implementation, not a public-release claim. Windows and Android CI builds and manual two-device tests must pass before treating it as installable. Endpoint identities and trusted-device records are still in memory and are cleared when the peer engine stops. Pairing uses a manually shared six-digit invite; automatic camera QR scanning is not implemented. File transfers currently run while both apps are open; pause/resume, background Android transfers, persistent identity, persistent trusted devices, conflict-safe finalization on every Android document provider, and OS clipboard integration remain unfinished. Browser-selected files are preview-only; native peer transfer runs in the installed Windows / Android app.
 
 ## Development
 
