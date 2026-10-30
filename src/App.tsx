@@ -15,6 +15,8 @@ type Theme="light"|"dark"|"system";
 type Attachment={id:string;file:File;url:string};
 type PeerTransportStatus={running:boolean;endpointId:string|null;identityPersisted:boolean};
 type PeerProbe={connected:boolean;remoteEndpointId:string;protocolVersion:number;message:string};
+type PairingInvite={endpointId:string;code:string;expiresInSeconds:number};
+type TrustedDevice={endpointId:string;pairedAtUnix:number};
 type Transfer={id:string;name:string;size:string;time:string;state:"Complete"|"Waiting"|"Failed";direction:"sent"|"received"};
 const navPrimary:{id:Page;label:string;icon:typeof Monitor}[]=[
  {id:"home",label:"Overview",icon:Monitor},{id:"send",label:"Send",icon:ArrowUpRight},
@@ -50,7 +52,7 @@ function App(){
  const [toast,setToast]=useState("");
  const [sendText,setSendText]=useState("");
  const [faqOpen,setFaqOpen]=useState<number|null>(0);
- const [pairingOpen,setPairingOpen]=useState(false);
+
  const [settingsSaved,setSettingsSaved]=useState(false);
  const [peerStatus,setPeerStatus]=useState<PeerTransportStatus>({running:false,endpointId:null,identityPersisted:false});
  const [peerBusy,setPeerBusy]=useState(false);
@@ -59,10 +61,19 @@ function App(){
  const [peerProbe,setPeerProbe]=useState<PeerProbe|null>(null);
  const [peerProbeBusy,setPeerProbeBusy]=useState(false);
  const [peerProbeError,setPeerProbeError]=useState("");
+ const [pairingInvite,setPairingInvite]=useState<PairingInvite|null>(null);
+ const [pairingInviteBusy,setPairingInviteBusy]=useState(false);
+ const [trustedDevices,setTrustedDevices]=useState<TrustedDevice[]>([]);
+ const [pairingDeviceId,setPairingDeviceId]=useState("");
+ const [pairingCode,setPairingCode]=useState("");
+ const [pairingBusy,setPairingBusy]=useState(false);
+ const [pairingError,setPairingError]=useState("");
+ const [trustedBusy,setTrustedBusy]=useState(false);
  useEffect(()=>{
   savePreferences({theme,reducedMotion,clipboardSync,sidebarCollapsed:!sidebarOpen});
  },[theme,reducedMotion,clipboardSync,sidebarOpen]);
  useEffect(()=>{invoke<PeerTransportStatus>("get_peer_transport_status").then(setPeerStatus).catch(()=>{});},[]);
+ useEffect(()=>{invoke<TrustedDevice[]>("get_trusted_devices").then(setTrustedDevices).catch(()=>{});},[]);
  const startPeerTransport=async()=>{
   setPeerBusy(true);setPeerError("");
   try{const status=await invoke<PeerTransportStatus>("start_peer_transport");setPeerStatus(status);toastMessage("Peer endpoint started. Pairing and file transfer are still in development.");}
@@ -85,6 +96,44 @@ function App(){
   }catch(error){
    setPeerProbeError(typeof error==="string"?error:"Could not connect to that peer.");
   }finally{setPeerProbeBusy(false);}
+ };
+ const createPairingInvite=async()=>{
+  setPairingInviteBusy(true);setPairingError("");
+  try{
+   const invite=await invoke<PairingInvite>("create_pairing_invite");
+   setPairingInvite(invite);
+   toastMessage("One-time pairing code created. It expires in 3 minutes.");
+  }catch(error){setPairingError(typeof error==="string"?error:"Could not create a pairing invitation.");}
+  finally{setPairingInviteBusy(false);}
+ };
+ const refreshTrustedDevices=async()=>{
+  setTrustedBusy(true);
+  try{setTrustedDevices(await invoke<TrustedDevice[]>("get_trusted_devices"));}
+  catch(error){setPairingError(typeof error==="string"?error:"Could not refresh paired devices.");}
+  finally{setTrustedBusy(false);}
+ };
+ const pairWithDevice=async()=>{
+  if(!pairingDeviceId.trim()||pairingCode.length!==6){setPairingError("Enter the other device ID and its six-digit invite code.");return;}
+  setPairingBusy(true);setPairingError("");
+  try{
+   const peer=await invoke<TrustedDevice>("pair_with_endpoint",{remoteEndpointId:pairingDeviceId.trim(),pairingCode});
+   setTrustedDevices(current=>[peer,...current.filter(item=>item.endpointId!==peer.endpointId)]);
+   setPairingCode("");
+   toastMessage("Devices paired for this session.");
+  }catch(error){setPairingError(typeof error==="string"?error:"Pairing could not be completed.");}
+  finally{setPairingBusy(false);}
+ };
+ const removeTrustedDevice=async(endpointId:string)=>{
+  try{
+   await invoke<boolean>("remove_trusted_device",{endpointId});
+   setTrustedDevices(current=>current.filter(item=>item.endpointId!==endpointId));
+   toastMessage("Device removed from this session.");
+  }catch(error){setPairingError(typeof error==="string"?error:"Could not remove the device.");}
+ };
+ const copyPairingCode=async()=>{
+  if(!pairingInvite)return;
+  try{await navigator.clipboard.writeText(pairingInvite.code);toastMessage("Pairing code copied.");}
+  catch{toastMessage("Clipboard access is unavailable in this context.");}
  };
  const copyLocalPeerId=async()=>{
   if(!peerStatus.endpointId)return;
@@ -149,7 +198,7 @@ function App(){
    <div className="content-scroll"><AnimatePresence mode="wait" initial={false}><motion.div key={page} className="page-content" initial={reducedMotion?false:{opacity:0,y:9}} animate={{opacity:1,y:0}} exit={reducedMotion?undefined:{opacity:0,y:-5}} transition={transition}>
     {page==="home"&&<HomePage transfers={transfers} onNavigate={navigate} onChoose={()=>fileInput.current?.click()} onDrop={onDrop} dragging={dragging} setDragging={setDragging}/>}
     {page==="send"&&<SendPage transfers={transfers} sendText={sendText} setSendText={setSendText} onChoose={()=>fileInput.current?.click()} onDrop={onDrop} dragging={dragging} setDragging={setDragging} onCopy={()=>{if(!sendText.trim())return;navigator.clipboard?.writeText(sendText);toastMessage("Text copied to clipboard");}}/>}
-    {page==="devices"&&<DevicesPage onPair={()=>setPairingOpen(true)} peerStatus={peerStatus} peerBusy={peerBusy} peerError={peerError} onStartPeer={startPeerTransport} onStopPeer={stopPeerTransport} peerTargetId={peerTargetId} setPeerTargetId={setPeerTargetId} peerProbe={peerProbe} peerProbeBusy={peerProbeBusy} peerProbeError={peerProbeError} onProbePeer={probePeerEndpoint} onCopyPeerId={copyLocalPeerId}/>}
+    {page==="devices"&&<DevicesPage peerStatus={peerStatus} peerBusy={peerBusy} peerError={peerError} onStartPeer={startPeerTransport} onStopPeer={stopPeerTransport} peerTargetId={peerTargetId} setPeerTargetId={setPeerTargetId} peerProbe={peerProbe} peerProbeBusy={peerProbeBusy} peerProbeError={peerProbeError} onProbePeer={probePeerEndpoint} onCopyPeerId={copyLocalPeerId} pairingInvite={pairingInvite} pairingInviteBusy={pairingInviteBusy} onCreatePairingInvite={createPairingInvite} onCopyPairingCode={copyPairingCode} pairingDeviceId={pairingDeviceId} setPairingDeviceId={setPairingDeviceId} pairingCode={pairingCode} setPairingCode={setPairingCode} pairingBusy={pairingBusy} pairingError={pairingError} onPairWithDevice={pairWithDevice} trustedDevices={trustedDevices} trustedBusy={trustedBusy} onRefreshTrustedDevices={refreshTrustedDevices} onRemoveTrustedDevice={removeTrustedDevice}/>}
     {page==="clipboard"&&<ClipboardPage items={clipboardItems} enabled={clipboardSync} onToggle={()=>setClipboardSync(v=>!v)} onClear={()=>setClipboardItems([])} onCopy={value=>{navigator.clipboard?.writeText(value);toastMessage("Copied");}}/>}
     {page==="activity"&&<ActivityPage transfers={transfers}/>}
     {page==="settings"&&<SettingsPage theme={theme} setTheme={value=>setTheme(value)} reducedMotion={reducedMotion} setReducedMotion={setReducedMotion} clipboardSync={clipboardSync} setClipboardSync={setClipboardSync} onSave={()=>{setSettingsSaved(true);toastMessage("Preferences saved on this device");}} settingsSaved={settingsSaved}/>}
@@ -160,7 +209,6 @@ function App(){
   <input ref={fileInput} className="visually-hidden" type="file" multiple onChange={event=>event.target.files&&addFiles(event.target.files)}/>
   <input ref={supportInput} className="visually-hidden" type="file" accept="image/*" multiple onChange={handleScreenshots}/>
   <AnimatePresence>{toast&&<motion.div className="toast" initial={{opacity:0,y:12,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:8}} transition={transition}><Check size={16}/>{toast}</motion.div>}</AnimatePresence>
-  <AnimatePresence>{pairingOpen&&<PairingModal onClose={()=>setPairingOpen(false)}/>}</AnimatePresence>
  </div>;
 }
 function NavButton({item,active,collapsed,onClick}:{item:{id:Page;label:string;icon:typeof Monitor};active:boolean;collapsed:boolean;onClick:()=>void}){
@@ -196,21 +244,41 @@ function SendPage({transfers,sendText,setSendText,onChoose,onDrop,dragging,setDr
  </div>;
 }
 
-function DevicesPage({onPair,peerStatus,peerBusy,peerError,onStartPeer,onStopPeer,peerTargetId,setPeerTargetId,peerProbe,peerProbeBusy,peerProbeError,onProbePeer,onCopyPeerId}:{onPair:()=>void;peerStatus:PeerTransportStatus;peerBusy:boolean;peerError:string;onStartPeer:()=>void;onStopPeer:()=>void;peerTargetId:string;setPeerTargetId:(v:string)=>void;peerProbe:PeerProbe|null;peerProbeBusy:boolean;peerProbeError:string;onProbePeer:()=>void;onCopyPeerId:()=>void}){
- return <div className="page-stack"><PageHeading eyebrow="TRUSTED CONNECTIONS" title="Your devices." subtitle="Start a secure peer endpoint, then test an encrypted connection to another Bridge device." action={<button className="button button-primary" onClick={onPair}><Plus size={16}/> Pairing preview</button>}/>
-  <div className="device-list-card surface-card"><DeviceRow icon={<Monitor size={20}/>} name="This device" description="Current Bridge installation" current/><div className="device-security-foot"><ShieldCheck size={16}/><span>A successful peer handshake verifies the remote cryptographic endpoint ID. Trust approval and durable pairing are not enabled yet.</span></div></div>
+function DevicesPage({peerStatus,peerBusy,peerError,onStartPeer,onStopPeer,peerTargetId,setPeerTargetId,peerProbe,peerProbeBusy,peerProbeError,onProbePeer,onCopyPeerId,pairingInvite,pairingInviteBusy,onCreatePairingInvite,onCopyPairingCode,pairingDeviceId,setPairingDeviceId,pairingCode,setPairingCode,pairingBusy,pairingError,onPairWithDevice,trustedDevices,trustedBusy,onRefreshTrustedDevices,onRemoveTrustedDevice}:{peerStatus:PeerTransportStatus;peerBusy:boolean;peerError:string;onStartPeer:()=>void;onStopPeer:()=>void;peerTargetId:string;setPeerTargetId:(v:string)=>void;peerProbe:PeerProbe|null;peerProbeBusy:boolean;peerProbeError:string;onProbePeer:()=>void;onCopyPeerId:()=>void;pairingInvite:PairingInvite|null;pairingInviteBusy:boolean;onCreatePairingInvite:()=>void;onCopyPairingCode:()=>void;pairingDeviceId:string;setPairingDeviceId:(v:string)=>void;pairingCode:string;setPairingCode:(v:string)=>void;pairingBusy:boolean;pairingError:string;onPairWithDevice:()=>void;trustedDevices:TrustedDevice[];trustedBusy:boolean;onRefreshTrustedDevices:()=>void;onRemoveTrustedDevice:(id:string)=>void}){
+ return <div className="page-stack"><PageHeading eyebrow="TRUSTED CONNECTIONS" title="Your devices." subtitle="Create a one-time invite, verify the other endpoint, and pair devices for this app session."/>
+  <div className="device-list-card surface-card"><DeviceRow icon={<Monitor size={20}/>} name="This device" description="Current Bridge installation" current/><div className="device-security-foot"><ShieldCheck size={16}/><span>Pairing authenticates the peer endpoint over an encrypted iroh connection. Session approvals are cleared when the network engine stops.</span></div></div>
   <PeerTransportCard status={peerStatus} busy={peerBusy} error={peerError} onStart={onStartPeer} onStop={onStopPeer} onCopyPeerId={onCopyPeerId} peerTargetId={peerTargetId} setPeerTargetId={setPeerTargetId} peerProbe={peerProbe} peerProbeBusy={peerProbeBusy} peerProbeError={peerProbeError} onProbePeer={onProbePeer}/>
-  <section className="surface-card pairing-info"><div className="pairing-info-icon"><QrCode size={19}/></div><div><h3>Pairing comes after identity verification</h3><p>The next layer will add a short-lived QR pairing invitation, mutual confirmation, an approval screen on both devices and persistent trusted-device records. A connectivity handshake alone does not make a device trusted.</p></div></section>
+  <PairingPanel running={peerStatus.running} invite={pairingInvite} inviteBusy={pairingInviteBusy} onCreateInvite={onCreatePairingInvite} onCopyCode={onCopyPairingCode} deviceId={pairingDeviceId} setDeviceId={setPairingDeviceId} code={pairingCode} setCode={setPairingCode} busy={pairingBusy} error={pairingError} onPair={onPairWithDevice}/>
+  <TrustedDevicesPanel devices={trustedDevices} busy={trustedBusy} onRefresh={onRefreshTrustedDevices} onRemove={onRemoveTrustedDevice}/>
  </div>;
+}
+function PairingPanel({running,invite,inviteBusy,onCreateInvite,onCopyCode,deviceId,setDeviceId,code,setCode,busy,error,onPair}:{running:boolean;invite:PairingInvite|null;inviteBusy:boolean;onCreateInvite:()=>void;onCopyCode:()=>void;deviceId:string;setDeviceId:(v:string)=>void;code:string;setCode:(v:string)=>void;busy:boolean;error:string;onPair:()=>void}){
+ return <section className="surface-card pairing-panel">
+  <div className="pairing-panel-head"><div><div className="eyebrow">ONE-TIME PAIRING</div><h2>Connect your own devices.</h2><p>Use a short-lived code so each device owner explicitly starts the connection.</p></div><div className="pairing-panel-icon"><QrCode size={19}/></div></div>
+  <div className="pairing-columns">
+   <div className="pairing-invite-side"><h3>Invite this device</h3><p>Generate a code here, then enter it on the other Bridge device along with this device ID.</p>
+    {invite?<div className="pairing-code-card"><span>ONE-TIME CODE · EXPIRES IN 3 MINUTES</span><strong>{invite.code.slice(0,3)} {invite.code.slice(3)}</strong><button className="button button-secondary" onClick={onCopyCode}><Copy size={14}/> Copy code</button></div>:<div className="pairing-code-empty"><LockKeyhole size={17}/><span>Your invite code will appear here.</span></div>}
+    <button className="button button-primary" onClick={onCreateInvite} disabled={!running||inviteBusy}><KeyRound size={15}/>{inviteBusy?"Creating invite…":invite?"Generate a new code":"Create pairing code"}</button>
+   </div>
+   <div className="pairing-join-side"><h3>Join another device</h3><label htmlFor="pair-peer-id">Other device ID</label><input id="pair-peer-id" value={deviceId} onChange={e=>setDeviceId(e.target.value)} placeholder="Paste the peer endpoint ID" spellCheck={false}/><label htmlFor="pair-code">Six-digit invite code</label><input id="pair-code" value={code} onChange={e=>setCode(e.target.value.replace(/[^0-9]/g,"").slice(0,6))} placeholder="000000" inputMode="numeric" autoComplete="one-time-code" maxLength={6}/><button className="button button-primary" onClick={onPair} disabled={!running||busy||!deviceId.trim()||code.length!==6}>{busy?"Pairing…":"Pair devices"}</button><small>Only enter a code that the other device owner just generated and shared with you.</small></div>
+  </div>
+  {error&&<p className="peer-error">{error}</p>}
+  <p className="pairing-session-note"><ShieldCheck size={13}/> Paired devices are trusted for this session only. Persistent identity and encrypted device storage are the next security milestone.</p>
+ </section>;
+}
+function TrustedDevicesPanel({devices,busy,onRefresh,onRemove}:{devices:TrustedDevice[];busy:boolean;onRefresh:()=>void;onRemove:(id:string)=>void}){
+ return <section className="surface-card trusted-devices-panel"><div className="section-title"><h2>Paired this session</h2><button className="text-button" onClick={onRefresh} disabled={busy}><RefreshCw size={13}/>{busy?"Refreshing…":"Refresh"}</button></div>
+  {devices.length?devices.map(device=><div className="trusted-device-row" key={device.endpointId}><div className="device-icon-wrap phone"><Smartphone size={17}/></div><div><strong>{`Device ${device.endpointId.slice(0,10)}…`}</strong><span>{`Paired ${new Date(device.pairedAtUnix*1000).toLocaleString()}`}</span><code>{device.endpointId}</code></div><button className="icon-button" onClick={()=>onRemove(device.endpointId)} aria-label="Remove paired device"><Trash2 size={15}/></button></div>):<div className="empty-inline"><ShieldCheck size={17}/> No devices paired in this session yet.</div>}
+ </section>;
 }
 function PeerTransportCard({status,busy,error,onStart,onStop,onCopyPeerId,peerTargetId,setPeerTargetId,peerProbe,peerProbeBusy,peerProbeError,onProbePeer}:{status:PeerTransportStatus;busy:boolean;error:string;onStart:()=>void;onStop:()=>void;onCopyPeerId:()=>void;peerTargetId:string;setPeerTargetId:(v:string)=>void;peerProbe:PeerProbe|null;peerProbeBusy:boolean;peerProbeError:string;onProbePeer:()=>void}){
  return <section className="surface-card peer-transport-card">
   <div className="peer-transport-head"><div className="peer-transport-icon"><Wifi size={18}/></div><div className="peer-transport-copy"><strong>Peer network engine</strong><span>{status.running?"Accepting encrypted Bridge control connections":"Not started on this device"}</span></div><span className={cx("transport-state",status.running&&"transport-state-on")}><i/>{status.running?"Running":"Stopped"}</span></div>
   {status.endpointId&&<div className="peer-id-row"><span>YOUR DEVICE ID · TEMPORARY UNTIL SECURE KEY STORAGE IS ADDED</span><div><code>{status.endpointId}</code><button className="icon-button" onClick={onCopyPeerId} aria-label="Copy this device ID"><Copy size={15}/></button></div></div>}
-  <p className="peer-transport-description">The native iroh/QUIC endpoint accepts a versioned Bridge control handshake. The encrypted connection authenticates the endpoint key, but this test does not pair devices, authorize file access or send files. The current identity is regenerated after restart.</p>
+  <p className="peer-transport-description">The native iroh/QUIC endpoint accepts a versioned Bridge control handshake. The encrypted connection authenticates the endpoint key. This network engine is required for pairing and will later carry file streams.</p>
   {error&&<p className="peer-error">{error}</p>}
   <div className="peer-transport-actions">{status.running?<button className="button button-secondary" onClick={onStop} disabled={busy}><X size={14}/>{busy?"Stopping…":"Stop peer engine"}</button>:<button className="button button-primary" onClick={onStart} disabled={busy}><Wifi size={14}/>{busy?"Starting…":"Start peer engine"}</button>}<span><LockKeyhole size={12}/> Encrypted peer identity</span></div>
-  <div className="peer-connect-area"><label htmlFor="peer-endpoint-id">Connect to another Bridge endpoint</label><div className="peer-connect-row"><input id="peer-endpoint-id" value={peerTargetId} onChange={e=>setPeerTargetId(e.target.value)} placeholder="Paste the other device's endpoint ID" spellCheck={false}/><button className="button button-primary" onClick={onProbePeer} disabled={!status.running||peerProbeBusy||!peerTargetId.trim()}>{peerProbeBusy?"Connecting…":"Test connection"}</button></div><small>Both devices must have Bridge open and the peer engine running.</small></div>
+  <div className="peer-connect-area"><label htmlFor="peer-endpoint-id">Test encrypted reachability</label><div className="peer-connect-row"><input id="peer-endpoint-id" value={peerTargetId} onChange={e=>setPeerTargetId(e.target.value)} placeholder="Paste another Bridge endpoint ID" spellCheck={false}/><button className="button button-secondary" onClick={onProbePeer} disabled={!status.running||peerProbeBusy||!peerTargetId.trim()}>{peerProbeBusy?"Connecting…":"Test"}</button></div><small>Both devices must have Bridge open and the peer engine running.</small></div>
   {peerProbeError&&<p className="peer-error">{peerProbeError}</p>}
   {peerProbe&&<div className="peer-probe-result"><CheckCheck size={16}/><div><strong>Encrypted connection verified</strong><span>{peerProbe.remoteEndpointId} · Bridge protocol v{peerProbe.protocolVersion}</span></div></div>}
  </section>;
@@ -272,7 +340,3 @@ function HelpPage({message,setMessage,attachments,onAttach,onRemoveAttachment,on
   </div>
  </div>;
 }
-function PairingModal({onClose}:{onClose:()=>void}){
- return <motion.div className="modal-backdrop" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><motion.div className="pairing-modal surface-card" initial={{opacity:0,y:18,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:10}} transition={{duration:.28}}><button className="icon-button modal-close" onClick={onClose} aria-label="Close pairing"><X size={18}/></button><div className="pairing-modal-symbol"><QrCode size={25}/></div><div className="eyebrow">DEVICE PAIRING</div><h2>Bring your devices closer.</h2><p>Pairing preview. A secure, short-lived QR and code exchange will be connected to the Rust transport in a later milestone.</p><div className="pair-code-preview"><span>DEMO PAIRING CODE</span><strong>BRG–482–193</strong><small>Illustrative only · not a real pairing token</small></div><button className="button button-primary button-full" onClick={onClose}>Got it</button></motion.div></motion.div>;
-}
-export default App;
