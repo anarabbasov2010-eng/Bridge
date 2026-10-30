@@ -1,0 +1,35 @@
+name: Android build
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["src/**","src-tauri/**","package.json","package-lock.json",".github/workflows/android.yml"]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22, cache: npm}
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: "17"}
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
+      - name: Install Android NDK
+        run: |
+          sdkmanager "ndk;27.2.12479018"
+          echo "NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - run: npm install
+      - name: Initialize Android project
+        run: npm run android:init
+      - name: Build APK
+        run: npm run android:build -- --apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-android-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
