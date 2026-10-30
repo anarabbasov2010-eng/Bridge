@@ -22,8 +22,9 @@
 - [x] Integrate native iroh endpoint lifecycle (bind, start / stop / status, versioned ALPN)
 - [ ] Persist peer identity in Windows DPAPI / Android Keystore-backed storage
 - [x] Implement versioned encrypted peer hello / hello-ack connectivity probe
-- [ ] Implement user-approved authenticated pairing and key confirmation
-- [ ] Trusted device list, revoke and re-pair
+- [x] Implement user-approved six-digit, one-use pairing invitations with expiry and attempt limits
+- [x] Session trusted-device list and revoke
+- [ ] Persist trusted devices with the platform-protected endpoint identity
 - [ ] Direct connection and relay fallback diagnostics
 - [ ] Security review of handshake and threat model
 
