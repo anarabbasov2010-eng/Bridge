@@ -4,9 +4,8 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 use transport::{
     IncomingFileOffer, PairingInviteInfo, PeerProbe, PeerTransport, SelectedFileInfo,
-    TransferProgress, TransferReceipt, TransportStatus, TrustedPeer,
+    TransferReceipt, TransportStatus, TrustedPeer,
 };
-use std::path::PathBuf;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,13 +28,13 @@ fn get_runtime_info() -> RuntimeInfo {
             "other"
         },
         transport_ready: true,
-        pairing_ready: false,
+        pairing_ready: true,
     }
 }
 
 #[tauri::command]
-async fn start_peer_transport(state: State<'_, PeerTransport>) -> Result<TransportStatus, String> {
-    state.start().await
+async fn start_peer_transport(app: AppHandle, state: State<'_, PeerTransport>) -> Result<TransportStatus, String> {
+    state.start(app).await
 }
 
 #[tauri::command]
