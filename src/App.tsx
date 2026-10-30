@@ -181,7 +181,7 @@ function SettingsPage({theme,setTheme,reducedMotion,setReducedMotion,clipboardSy
  </div>;
 }
 function SettingsGroup({title,description,children}:{title:string;description:string;children:ReactNode}){return <section className="surface-card settings-group"><div className="settings-group-heading"><h3>{title}</h3><p>{description}</p></div>{children}</section>;}
-function SettingLine({title,subtitle,right}:{title:string;subtitle:string;right:ReactNode}){return <div className="setting-line"><div><strong>{title}</strong><span>{subtitle}</span></div>{right}</div>;}
+function SettingLine({title,subtitle,right,children}:{title:string;subtitle:string;right?:ReactNode;children?:ReactNode}){return <div className="setting-line"><div><strong>{title}</strong><span>{subtitle}</span></div>{right??children}</div>;}
 function Toggle({value,onChange}:{value:boolean;onChange:(v:boolean)=>void}){return <button className={cx("toggle",value&&"toggle-on")} aria-pressed={value} onClick={()=>onChange(!value)}><i/></button>;}
 
 const faqs=[
