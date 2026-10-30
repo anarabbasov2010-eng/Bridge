@@ -1121,58 +1121,8 @@ async fn receive_file_payload(
     Ok(())
 }
 
-fn file_name_from_path(path: &FilePath) -> String {
-    match path {
-        FilePath::Path(path) => path.file_name().and_then(|name| name.to_str()).unwrap_or("Shared file").to_string(),
-        FilePath::Url(url) => url.path_segments()
-            .and_then(|segments| segments.last())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Shared file")
-            .to_string(),
-    }
-}
-
-fn safe_file_name(value: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty()
-        || trimmed.len() > MAX_FILE_NAME_BYTES
-        || trimmed == "."
-        || trimmed == ".."
-        || trimmed.chars().any(|ch| ch.is_control() || ch == '/' || ch == '\\')
-    {
-        return Err("The file name is not safe to use.".to_string());
-    }
-    Ok(trimmed.to_string())
-}
-
 fn is_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn encode_control_request(message_type: &str, pairing_code: Option<String>) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(&ControlRequest {
-        message_type: message_type.to_string(),
-        protocol_version: PROTOCOL_VERSION,
-        pairing_code,
-        transfer_id: None,
-        file_name: None,
-        size_bytes: None,
-        sha256: None,
-    }).map_err(|error| format!("Could not encode the Bridge control request: {error}"))
-}
-
-fn consume_pairing_invite(invite: &Mutex<Option<PairingInvite>>, supplied_code: &str) -> bool {
-    let Ok(mut slot) = invite.lock() else { return false; };
-    let Some(active) = slot.as_mut() else { return false; };
-    if Instant::now() >= active.expires_at || active.attempts_remaining == 0 {
-        *slot = None;
-        return false;
-    }
-    active.attempts_remaining = active.attempts_remaining.saturating_sub(1);
-    let supplied_hash: [u8; 32] = Sha256::digest(supplied_code.as_bytes()).into();
-    let matches = active.code_hash.ct_eq(&supplied_hash).unwrap_u8() == 1;
-    if matches || active.attempts_remaining == 0 { *slot = None; }
-    matches
 }
 
 #[cfg(test)]
