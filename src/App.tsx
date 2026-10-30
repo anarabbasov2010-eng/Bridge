@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import { QRCodeSVG } from "qrcode.react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
@@ -14,6 +15,7 @@ import { loadPreferences, savePreferences } from "./lib/preferences";
 type Page="home"|"send"|"devices"|"clipboard"|"activity"|"settings"|"help";
 type Theme="light"|"dark"|"system";
 type Attachment={id:string;file:File;url:string};
+type SelectedFile={id:string;name:string;sizeLabel:string;path?:string;file?:File};
 type PeerTransportStatus={running:boolean;endpointId:string|null;identityPersisted:boolean};
 type PeerProbe={connected:boolean;remoteEndpointId:string;protocolVersion:number;message:string};
 type PairingInvite={endpointId:string;code:string;expiresInSeconds:number};
@@ -44,6 +46,7 @@ function App(){
  const [reducedMotion,setReducedMotion]=useState(preferences.reducedMotion || Boolean(prefersReduced));
  const [sidebarOpen,setSidebarOpen]=useState(!preferences.sidebarCollapsed);
  const [transfers,setTransfers]=useState(initialTransfers);
+ const [selectedFiles,setSelectedFiles]=useState<SelectedFile[]>([]);
  const [clipboardItems,setClipboardItems]=useState(initialClipboard);
  const [clipboardSync,setClipboardSync]=useState(preferences.clipboardSync);
  const [message,setMessage]=useState("");
@@ -158,9 +161,36 @@ function App(){
  const navigate=(next:Page)=>setPage(next);
  const addFiles=(files:FileList|File[])=>{
   const accepted=Array.from(files);if(!accepted.length)return;
-  const entries:Transfer[]=accepted.map((file,index)=>({id:`local-${Date.now()}-${index}`,name:file.name,size:formatBytes(file.size),time:"Just now",state:"Waiting",direction:"sent"}));
-  setTransfers(current=>[...entries,...current]);toastMessage(`${accepted.length} file${accepted.length>1?"s":""} added to the local demo queue`);navigate("send");
+  const entries:SelectedFile[]=accepted.map((file,index)=>({
+   id:`browser-${Date.now()}-${index}`,name:file.name,sizeLabel:formatBytes(file.size),file
+  }));
+  setSelectedFiles(current=>[...current,...entries]);
+  toastMessage(`${accepted.length} file${accepted.length>1?"s":""} selected on this device`);
+  navigate("send");
  };
+ const chooseFiles=async()=>{
+  try{
+   const result=await openFileDialog({multiple:true,directory:false,title:"Choose files to send"});
+   if(!result)return;
+   const paths=Array.isArray(result)?result:[result];
+   const entries:SelectedFile[]=paths.map((path,index)=>{
+    const normalized=path.replace(/\\/g,"/");
+    let name=normalized.split("/").pop()||"Selected file";
+    try{name=decodeURIComponent(name);}catch{/* Keep the original URI segment. */}
+    if(name.includes(":"))name=name.split(":").pop()||name;
+    return {id:`native-${Date.now()}-${index}`,name,sizeLabel:"Size available after file streaming is connected",path};
+   });
+   setSelectedFiles(current=>[...current,...entries]);
+   toastMessage(`${entries.length} file${entries.length>1?"s":""} selected`);
+   navigate("send");
+  }catch{
+   // The native dialog bridge is unavailable in a regular browser: use the
+   // standard browser picker as the web fallback.
+   fileInput.current?.click();
+  }
+ };
+ const removeSelectedFile=(id:string)=>setSelectedFiles(current=>current.filter(item=>item.id!==id));
+ const clearSelectedFiles=()=>setSelectedFiles([]);
  const onDrop=(event:DragEvent<HTMLDivElement>)=>{event.preventDefault();setDragging(false);addFiles(event.dataTransfer.files);};
  const handleScreenshots=(event:ChangeEvent<HTMLInputElement>)=>{
   const selected=Array.from(event.target.files??[]);const valid:Attachment[]=[];const errors:string[]=[];
@@ -197,8 +227,8 @@ function App(){
   <main className="main-area">
    <header className="topbar"><div className="topbar-left"><button className="mobile-menu icon-button" onClick={()=>setSidebarOpen(v=>!v)} aria-label="Toggle navigation"><Menu size={19}/></button><span className="breadcrumb-root">Bridge</span><ChevronRight size={14} className="crumb-chevron"/><span className="breadcrumb-current">{pageTitle[page]}</span></div><div className="topbar-actions"><div className="connection-pill"><span className="status-dot"/><span>2 devices</span></div><button className="icon-button" aria-label="Open activity" onClick={()=>navigate("activity")}><Activity size={17}/></button><button className="avatar-button" aria-label="Local profile">A</button></div></header>
    <div className="content-scroll"><AnimatePresence mode="wait" initial={false}><motion.div key={page} className="page-content" initial={reducedMotion?false:{opacity:0,y:9}} animate={{opacity:1,y:0}} exit={reducedMotion?undefined:{opacity:0,y:-5}} transition={transition}>
-    {page==="home"&&<HomePage transfers={transfers} onNavigate={navigate} onChoose={()=>fileInput.current?.click()} onDrop={onDrop} dragging={dragging} setDragging={setDragging}/>}
-    {page==="send"&&<SendPage transfers={transfers} sendText={sendText} setSendText={setSendText} onChoose={()=>fileInput.current?.click()} onDrop={onDrop} dragging={dragging} setDragging={setDragging} onCopy={()=>{if(!sendText.trim())return;navigator.clipboard?.writeText(sendText);toastMessage("Text copied to clipboard");}}/>}
+    {page==="home"&&<HomePage transfers={transfers} onNavigate={navigate} onChoose={chooseFiles} onDrop={onDrop} dragging={dragging} setDragging={setDragging}/>}
+    {page==="send"&&<SendPage transfers={transfers} selectedFiles={selectedFiles} onRemoveFile={removeSelectedFile} onClearFiles={clearSelectedFiles} sendText={sendText} setSendText={setSendText} onChoose={chooseFiles} onDrop={onDrop} dragging={dragging} setDragging={setDragging} onCopy={()=>{if(!sendText.trim())return;navigator.clipboard?.writeText(sendText);toastMessage("Text copied to clipboard");}}/>}
     {page==="devices"&&<DevicesPage peerStatus={peerStatus} peerBusy={peerBusy} peerError={peerError} onStartPeer={startPeerTransport} onStopPeer={stopPeerTransport} peerTargetId={peerTargetId} setPeerTargetId={setPeerTargetId} peerProbe={peerProbe} peerProbeBusy={peerProbeBusy} peerProbeError={peerProbeError} onProbePeer={probePeerEndpoint} onCopyPeerId={copyLocalPeerId} pairingInvite={pairingInvite} pairingInviteBusy={pairingInviteBusy} onCreatePairingInvite={createPairingInvite} onCopyPairingCode={copyPairingCode} pairingDeviceId={pairingDeviceId} setPairingDeviceId={setPairingDeviceId} pairingCode={pairingCode} setPairingCode={setPairingCode} pairingBusy={pairingBusy} pairingError={pairingError} onPairWithDevice={pairWithDevice} trustedDevices={trustedDevices} trustedBusy={trustedBusy} onRefreshTrustedDevices={refreshTrustedDevices} onRemoveTrustedDevice={removeTrustedDevice}/>}
     {page==="clipboard"&&<ClipboardPage items={clipboardItems} enabled={clipboardSync} onToggle={()=>setClipboardSync(v=>!v)} onClear={()=>setClipboardItems([])} onCopy={value=>{navigator.clipboard?.writeText(value);toastMessage("Copied");}}/>}
     {page==="activity"&&<ActivityPage transfers={transfers}/>}
@@ -207,7 +237,7 @@ function App(){
    </motion.div></AnimatePresence></div>
    <footer className="statusbar"><span><span className="status-dot"/> All systems local in this preview</span><span>Made for your devices <span className="status-heart">·</span> Help is always close</span></footer>
   </main>
-  <input ref={fileInput} className="visually-hidden" type="file" multiple onChange={event=>event.target.files&&addFiles(event.target.files)}/>
+  <input ref={fileInput} className="visually-hidden" type="file" multiple onChange={event=>{if(event.target.files)addFiles(event.target.files);event.target.value="";}}/>
   <input ref={supportInput} className="visually-hidden" type="file" accept="image/*" multiple onChange={handleScreenshots}/>
   <AnimatePresence>{toast&&<motion.div className="toast" initial={{opacity:0,y:12,scale:.98}} animate={{opacity:1,y:0,scale:1}} exit={{opacity:0,y:8}} transition={transition}><Check size={16}/>{toast}</motion.div>}</AnimatePresence>
  </div>;
@@ -236,10 +266,11 @@ function HomePage({transfers,onNavigate,onChoose,onDrop,dragging,setDragging}:{t
  </div>;
 }
 
-function SendPage({transfers,sendText,setSendText,onChoose,onDrop,dragging,setDragging,onCopy}:{transfers:Transfer[];sendText:string;setSendText:(v:string)=>void;onChoose:()=>void;onDrop:(e:DragEvent<HTMLDivElement>)=>void;dragging:boolean;setDragging:(v:boolean)=>void;onCopy:()=>void}){
+function SendPage({transfers,selectedFiles,onRemoveFile,onClearFiles,sendText,setSendText,onChoose,onDrop,dragging,setDragging,onCopy}:{transfers:Transfer[];selectedFiles:SelectedFile[];onRemoveFile:(id:string)=>void;onClearFiles:()=>void;sendText:string;setSendText:(v:string)=>void;onChoose:()=>void;onDrop:(e:DragEvent<HTMLDivElement>)=>void;dragging:boolean;setDragging:(v:boolean)=>void;onCopy:()=>void}){
  return <div className="page-stack narrow-stack"><PageHeading eyebrow="SEND TO YOUR DEVICES" title="A little less friction." subtitle="Choose what you'd like to move, then pick where it should go."/>
   <section className="surface-card send-recipient"><div className="send-recipient-label"><span>Send to</span><span className="secure-label"><LockKeyhole size={12}/> Private pairing · UI preview</span></div><div className="recipient-select"><div className="device-icon-wrap phone"><Smartphone size={19}/></div><div><strong>Android phone</strong><small>Example device · Not paired yet</small></div><ChevronDown size={16}/></div></section>
-  <div className={cx("dropzone send-dropzone",dragging&&"dropzone-active")} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={onDrop}><div className="dropzone-icon"><Files size={22}/></div><h3>Drop files to send</h3><p>Documents, photos, videos and more.</p><button className="button button-primary" onClick={onChoose}><FolderOpen size={16}/> Browse files</button><span className="dropzone-footnote">Files are queued locally in this preview. The transfer engine is a separate milestone.</span></div>
+  <div className={cx("dropzone send-dropzone",dragging&&"dropzone-active")} onDragOver={e=>{e.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={onDrop}><div className="dropzone-icon"><Files size={22}/></div><h3>Drop files to send</h3><p>Documents, photos, videos and more.</p><button className="button button-primary" onClick={onChoose}><FolderOpen size={16}/> Browse files</button><span className="dropzone-footnote">Native file picker works on Windows and Android. Actual sending is the next engine milestone.</span></div>
+  {selectedFiles.length>0&&<section className="surface-card selected-files-card"><div className="section-title"><h2>Selected files</h2><button className="text-button" onClick={onClearFiles}>Clear all <X size={13}/></button></div><div className="selected-files-list">{selectedFiles.map(item=><div className="selected-file-row" key={item.id}><div className="file-icon"><File size={16}/></div><div><strong>{item.name}</strong><span>{item.sizeLabel}</span></div><button className="icon-button" onClick={()=>onRemoveFile(item.id)} aria-label={`Remove ${item.name}`}><X size={14}/></button></div>)}</div><p className="selected-files-note"><LockKeyhole size={13}/> Files are selected locally. No file contents have been uploaded or transmitted yet.</p></section>}
   <section className="surface-card send-text-card"><div className="send-text-head"><div><h3>Send a message</h3><p>Text, links, snippets — anything you can copy.</p></div><div className="mini-icon"><MessageCircle size={17}/></div></div><textarea value={sendText} onChange={e=>setSendText(e.target.value)} placeholder="Paste a link or write something short…" rows={4}/><div className="send-text-footer"><span>{sendText.length} characters</span><button className="button button-secondary" onClick={onCopy} disabled={!sendText.trim()}><Copy size={15}/> Copy text</button></div></section>
   <section className="surface-card queued-card"><SectionTitle title="Transfer queue" action={<span className="muted-count">{transfers.filter(item=>item.state==="Waiting").length} waiting</span>}/><div className="activity-list">{transfers.some(item=>item.state==="Waiting")?transfers.filter(item=>item.state==="Waiting").map(item=><ActivityRow key={item.id} item={item}/>):<div className="empty-inline"><CheckCheck size={18}/> Nothing waiting. You're all caught up.</div>}</div></section>
  </div>;
