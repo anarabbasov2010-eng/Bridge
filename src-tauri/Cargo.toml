@@ -18,3 +18,4 @@ tokio = { version = "1", features = ["io-util", "rt", "rt-multi-thread", "macros
 rand = "0.9"
 sha2 = "0.10"
 subtle = "2"
+tauri-plugin-dialog = "2"
