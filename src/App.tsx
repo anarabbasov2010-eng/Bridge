@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
  Activity, ArrowLeftRight, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronRight,
@@ -47,6 +47,16 @@ function App(){
  const [faqOpen,setFaqOpen]=useState<number|null>(0);
  const [pairingOpen,setPairingOpen]=useState(false);
  const [settingsSaved,setSettingsSaved]=useState(false);
+ useEffect(()=>{
+  if(theme==="system"){
+   const media=window.matchMedia("(prefers-color-scheme: dark)");
+   const sync=()=>setDark(media.matches);
+   sync();
+   media.addEventListener("change",sync);
+   return ()=>media.removeEventListener("change",sync);
+  }
+  setDark(theme==="dark");
+ },[theme]);
  const fileInput=useRef<HTMLInputElement>(null);
  const supportInput=useRef<HTMLInputElement>(null);
  const transition=reducedMotion?{duration:0}:{duration:.34,ease:[.22,1,.36,1] as const};
@@ -98,7 +108,7 @@ function App(){
     {page==="devices"&&<DevicesPage onPair={()=>setPairingOpen(true)}/>}
     {page==="clipboard"&&<ClipboardPage items={clipboardItems} enabled={clipboardSync} onToggle={()=>setClipboardSync(v=>!v)} onClear={()=>setClipboardItems([])} onCopy={value=>{navigator.clipboard?.writeText(value);toastMessage("Copied");}}/>}
     {page==="activity"&&<ActivityPage transfers={transfers}/>}
-    {page==="settings"&&<SettingsPage theme={theme} setTheme={value=>{setTheme(value);setDark(value==="dark");}} reducedMotion={reducedMotion} setReducedMotion={setReducedMotion} clipboardSync={clipboardSync} setClipboardSync={setClipboardSync} onSave={()=>{setSettingsSaved(true);toastMessage("Preferences saved for this session");}} settingsSaved={settingsSaved}/>}
+    {page==="settings"&&<SettingsPage theme={theme} setTheme={value=>setTheme(value)} reducedMotion={reducedMotion} setReducedMotion={setReducedMotion} clipboardSync={clipboardSync} setClipboardSync={setClipboardSync} onSave={()=>{setSettingsSaved(true);toastMessage("Preferences saved for this session");}} settingsSaved={settingsSaved}/>}
     {page==="help"&&<HelpPage message={message} setMessage={value=>{setMessage(clampSupportMessage(value));setSupportStatus("");}} attachments={attachments} onAttach={()=>supportInput.current?.click()} onRemoveAttachment={removeAttachment} onEmail={openSupportEmail} supportStatus={supportStatus} faqOpen={faqOpen} setFaqOpen={setFaqOpen}/>}
    </motion.div></AnimatePresence></div>
    <footer className="statusbar"><span><span className="status-dot"/> All systems local in this preview</span><span>Made for your devices <span className="status-heart">·</span> Help is always close</span></footer>
