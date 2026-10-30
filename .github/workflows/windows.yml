@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ["src/**","src-tauri/**","package.json","package-lock.json","vite.config.ts",".github/workflows/windows.yml"]
+    paths: ["src/**","src-tauri/**","package.json","vite.config.ts","vitest.config.ts",".github/workflows/windows.yml"]
 permissions:
   contents: read
 jobs:
@@ -12,11 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: {node-version: 22, cache: npm}
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
       - name: Install NSIS
         run: choco install -y nsis
       - run: npm install
+      - run: npx tauri icon src-tauri/icons/bridge.svg --output src-tauri/icons
       - run: npm run test
       - run: npm run build
       - name: Build Windows installer

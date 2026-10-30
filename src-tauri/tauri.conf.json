@@ -6,5 +6,5 @@
   "build":{"beforeDevCommand":"npm run dev","devUrl":"http://localhost:1420","beforeBuildCommand":"npm run build","frontendDist":"../dist"},
   "app":{"windows":[{"title":"Bridge","width":1280,"height":840,"minWidth":760,"minHeight":620,"resizable":true,"fullscreen":false,"center":true}],
     "security":{"csp":"default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost blob: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://fonts.googleapis.com https://fonts.gstatic.com"}},
-  "bundle":{"active":true,"targets":["nsis"],"category":"Utility","shortDescription":"Move things between your devices","longDescription":"A free, privacy-first companion for moving content between Windows and Android devices."}
+  "bundle":{"active":true,"targets":["nsis"],"icon":["icons/32x32.png","icons/128x128.png","icons/128x128@2x.png","icons/icon.icns","icons/icon.ico"],"category":"Utility","shortDescription":"Move things between your devices","longDescription":"A free, privacy-first companion for moving content between Windows and Android devices."}
 }
