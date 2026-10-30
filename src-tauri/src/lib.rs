@@ -2,7 +2,7 @@ mod transport;
 
 use serde::Serialize;
 use tauri::State;
-use transport::{PeerTransport, TransportStatus};
+use transport::{PeerProbe, PeerTransport, TransportStatus};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +44,14 @@ fn get_peer_transport_status(state: State<'_, PeerTransport>) -> Result<Transpor
     state.status()
 }
 
+#[tauri::command]
+async fn probe_peer_endpoint(
+    state: State<'_, PeerTransport>,
+    remote_endpoint_id: String,
+) -> Result<PeerProbe, String> {
+    state.probe_peer(remote_endpoint_id).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -52,7 +60,8 @@ pub fn run() {
             get_runtime_info,
             start_peer_transport,
             stop_peer_transport,
-            get_peer_transport_status
+            get_peer_transport_status,
+            probe_peer_endpoint
         ])
         .run(tauri::generate_context!())
         .expect("error while running Bridge");
