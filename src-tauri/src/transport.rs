@@ -34,21 +34,30 @@ impl PeerTransport {
             .map_err(|error| format!("Unable to start Bridge peer transport: {error}"))?;
 
         let endpoint_id = endpoint.id().to_string();
-        let mut slot = self.endpoint.lock()
-            .map_err(|_| "Bridge transport state is unavailable".to_string())?;
 
-        if let Some(existing) = slot.as_ref() {
-            let status = TransportStatus {
-                running: true,
-                endpoint_id: Some(existing.id().to_string()),
-                identity_persisted: false,
-            };
-            drop(slot);
+        // Keep the synchronous mutex guard entirely inside this scope. Tauri
+        // commands must return Send futures, and a MutexGuard cannot cross await.
+        let already_running = {
+            let mut slot = self.endpoint.lock()
+                .map_err(|_| "Bridge transport state is unavailable".to_string())?;
+
+            if let Some(existing) = slot.as_ref() {
+                Some(TransportStatus {
+                    running: true,
+                    endpoint_id: Some(existing.id().to_string()),
+                    identity_persisted: false,
+                })
+            } else {
+                *slot = Some(endpoint);
+                None
+            }
+        };
+
+        if let Some(status) = already_running {
             endpoint.close().await;
             return Ok(status);
         }
 
-        *slot = Some(endpoint);
         Ok(TransportStatus {
             running: true,
             endpoint_id: Some(endpoint_id),
