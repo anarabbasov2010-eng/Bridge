@@ -1,6 +1,7 @@
 use iroh::{endpoint::presets, Endpoint, EndpointId};
 use serde::{Deserialize, Serialize};
-use std::{str::FromStr, sync::Mutex};
+use std::{str::FromStr, sync::{Arc, Mutex}, time::Duration};
+use tokio::sync::Semaphore;
 use tokio::io::AsyncWriteExt;
 
 /// Bridge's versioned peer-control protocol. File transfer ALPN will be added
@@ -139,7 +140,9 @@ impl PeerTransport {
         let remote_id = EndpointId::from_str(remote_endpoint_id.trim())
             .map_err(|_| "That device ID is not a valid iroh endpoint ID.".to_string())?;
 
-        let connection = endpoint.connect(remote_id, BRIDGE_ALPN).await
+        let connection = tokio::time::timeout(Duration::from_secs(12), endpoint.connect(remote_id, BRIDGE_ALPN))
+            .await
+            .map_err(|_| "Timed out while connecting to that device.".to_string())?
             .map_err(|error| format!("Could not connect to that device: {error}"))?;
 
         // iroh authenticates the remote endpoint key as part of its encrypted
@@ -200,23 +203,39 @@ impl PeerTransport {
 }
 
 async fn run_accept_loop(endpoint: Endpoint) {
+    // Bound concurrent control sessions so unauthenticated callers cannot
+    // create an unlimited number of long-lived handshake tasks.
+    let active_sessions = Arc::new(Semaphore::new(8));
+
     while let Some(incoming) = endpoint.accept().await {
+        let permit = match Arc::clone(&active_sessions).try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                incoming.refuse();
+                continue;
+            }
+        };
+
         let local_endpoint_id = endpoint.id().to_string();
         tokio::spawn(async move {
-            let connection = match incoming.await {
-                Ok(connection) => connection,
-                Err(_) => return,
+            let _session_permit = permit;
+
+            let connection = match tokio::time::timeout(Duration::from_secs(10), incoming).await {
+                Ok(Ok(connection)) => connection,
+                _ => return,
             };
 
-            let remote_endpoint_id = connection.remote_id().to_string();
             let (mut send, mut recv) = match connection.accept_bi().await {
                 Ok(streams) => streams,
                 Err(_) => return,
             };
 
-            let request_bytes = match recv.read_to_end(MAX_CONTROL_FRAME).await {
-                Ok(bytes) => bytes,
-                Err(_) => return,
+            let request_bytes = match tokio::time::timeout(
+                Duration::from_secs(8),
+                recv.read_to_end(MAX_CONTROL_FRAME),
+            ).await {
+                Ok(Ok(bytes)) => bytes,
+                _ => return,
             };
 
             let response = match serde_json::from_slice::<ControlRequest>(&request_bytes) {
@@ -234,7 +253,7 @@ async fn run_accept_loop(endpoint: Endpoint) {
                 _ => ControlResponse {
                     message_type: "bridge.error".to_string(),
                     protocol_version: PROTOCOL_VERSION,
-                    endpoint_id: local_endpoint_id.clone(),
+                    endpoint_id: local_endpoint_id,
                     message: "Unsupported or malformed Bridge control request.".to_string(),
                 },
             };
@@ -246,7 +265,6 @@ async fn run_accept_loop(endpoint: Endpoint) {
 
             // This first control protocol only verifies encrypted reachability.
             // It does not grant trust or authorize file transfer.
-            let _ = remote_endpoint_id;
             connection.closed().await;
         });
     }

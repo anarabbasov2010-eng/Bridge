@@ -21,7 +21,8 @@
 ## Milestone 2 — trusted device connectivity
 - [x] Integrate native iroh endpoint lifecycle (bind, start / stop / status, versioned ALPN)
 - [ ] Persist peer identity in Windows DPAPI / Android Keystore-backed storage
-- [ ] Implement authenticated pairing and key confirmation
+- [x] Implement versioned encrypted peer hello / hello-ack connectivity probe
+- [ ] Implement user-approved authenticated pairing and key confirmation
 - [ ] Trusted device list, revoke and re-pair
 - [ ] Direct connection and relay fallback diagnostics
 - [ ] Security review of handshake and threat model
