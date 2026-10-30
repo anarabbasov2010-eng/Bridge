@@ -21,7 +21,7 @@ Bridge is a free, privacy-first cross-device companion for Windows and Android. 
 - **Peer transport:** iroh / QUIC, with relay-assisted connection establishment when direct connectivity is unavailable.
 - **Builds:** GitHub Actions for Windows and Android.
 
-The UI scaffolding currently contains local demo data and interaction flows. Real peer transport, trusted-device identity storage, and background transfer workers are separate implementation milestones and are not represented as completed yet.
+The app includes the React UI foundation, local demo interactions, support validation, a Tauri shell, and a native iroh peer-endpoint lifecycle (start / stop / status / ephemeral peer ID). Authenticated pairing, persistent device identity, connection handlers, file transfer and clipboard OS integration are still separate milestones and are not represented as completed yet.
 
 ## Development
 
