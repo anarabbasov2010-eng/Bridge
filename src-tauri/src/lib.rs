@@ -1,10 +1,12 @@
 mod transport;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use transport::{
-    PairingInviteInfo, PeerProbe, PeerTransport, TransportStatus, TrustedPeer,
+    IncomingFileOffer, PairingInviteInfo, PeerProbe, PeerTransport, SelectedFileInfo,
+    TransferProgress, TransferReceipt, TransportStatus, TrustedPeer,
 };
+use std::path::PathBuf;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,10 +83,51 @@ fn remove_trusted_device(
     state.remove_trusted_device(&endpoint_id)
 }
 
+#[tauri::command]
+fn pick_files_for_transfer(app: AppHandle, state: State<'_, PeerTransport>) -> Result<Vec<SelectedFileInfo>, String> {
+    state.pick_files_for_transfer(&app)
+}
+
+#[tauri::command]
+fn release_selected_file(state: State<'_, PeerTransport>, selected_file_id: String) -> Result<bool, String> {
+    state.release_selected_file(&selected_file_id)
+}
+
+#[tauri::command]
+async fn send_file_to_peer(
+    app: AppHandle,
+    state: State<'_, PeerTransport>,
+    remote_endpoint_id: String,
+    selected_file_id: String,
+) -> Result<TransferReceipt, String> {
+    state.send_file_to_peer(app, remote_endpoint_id, selected_file_id).await
+}
+
+#[tauri::command]
+fn get_incoming_file_offers(state: State<'_, PeerTransport>) -> Result<Vec<IncomingFileOffer>, String> {
+    state.incoming_file_offers()
+}
+
+#[tauri::command]
+fn accept_file_offer(
+    app: AppHandle,
+    state: State<'_, PeerTransport>,
+    offer_id: String,
+    suggested_file_name: String,
+) -> Result<bool, String> {
+    state.accept_file_offer(&app, &offer_id, &suggested_file_name)
+}
+
+#[tauri::command]
+fn reject_file_offer(state: State<'_, PeerTransport>, offer_id: String) -> Result<bool, String> {
+    state.reject_file_offer(&offer_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(PeerTransport::default())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,
@@ -95,7 +138,13 @@ pub fn run() {
             create_pairing_invite,
             pair_with_endpoint,
             get_trusted_devices,
-            remove_trusted_device
+            remove_trusted_device,
+            pick_files_for_transfer,
+            release_selected_file,
+            send_file_to_peer,
+            get_incoming_file_offers,
+            accept_file_offer,
+            reject_file_offer
         ])
         .run(tauri::generate_context!())
         .expect("error while running Bridge");
