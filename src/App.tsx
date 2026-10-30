@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
  Activity, ArrowLeftRight, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronRight,
@@ -11,6 +12,7 @@ import { clampSupportMessage, formatBytes, SUPPORT_MESSAGE_LIMIT, SUPPORT_SCREEN
 type Page="home"|"send"|"devices"|"clipboard"|"activity"|"settings"|"help";
 type Theme="light"|"dark"|"system";
 type Attachment={id:string;file:File;url:string};
+type PeerTransportStatus={running:boolean;endpointId:string|null;identityPersisted:boolean};
 type Transfer={id:string;name:string;size:string;time:string;state:"Complete"|"Waiting"|"Failed";direction:"sent"|"received"};
 const navPrimary:{id:Page;label:string;icon:typeof Monitor}[]=[
  {id:"home",label:"Overview",icon:Monitor},{id:"send",label:"Send",icon:ArrowUpRight},
@@ -47,6 +49,22 @@ function App(){
  const [faqOpen,setFaqOpen]=useState<number|null>(0);
  const [pairingOpen,setPairingOpen]=useState(false);
  const [settingsSaved,setSettingsSaved]=useState(false);
+ const [peerStatus,setPeerStatus]=useState<PeerTransportStatus>({running:false,endpointId:null,identityPersisted:false});
+ const [peerBusy,setPeerBusy]=useState(false);
+ const [peerError,setPeerError]=useState("");
+ useEffect(()=>{invoke<PeerTransportStatus>("get_peer_transport_status").then(setPeerStatus).catch(()=>{});},[]);
+ const startPeerTransport=async()=>{
+  setPeerBusy(true);setPeerError("");
+  try{const status=await invoke<PeerTransportStatus>("start_peer_transport");setPeerStatus(status);toastMessage("Peer endpoint started. Pairing and file transfer are still in development.");}
+  catch(error){setPeerError(typeof error==="string"?error:"Native peer networking is available inside the installed Bridge app.");}
+  finally{setPeerBusy(false);}
+ };
+ const stopPeerTransport=async()=>{
+  setPeerBusy(true);setPeerError("");
+  try{const status=await invoke<PeerTransportStatus>("stop_peer_transport");setPeerStatus(status);toastMessage("Peer endpoint stopped.");}
+  catch(error){setPeerError(typeof error==="string"?error:"Could not stop the native peer endpoint.");}
+  finally{setPeerBusy(false);}
+ };
  useEffect(()=>{
   if(theme==="system"){
    const media=window.matchMedia("(prefers-color-scheme: dark)");
@@ -105,7 +123,7 @@ function App(){
    <div className="content-scroll"><AnimatePresence mode="wait" initial={false}><motion.div key={page} className="page-content" initial={reducedMotion?false:{opacity:0,y:9}} animate={{opacity:1,y:0}} exit={reducedMotion?undefined:{opacity:0,y:-5}} transition={transition}>
     {page==="home"&&<HomePage transfers={transfers} onNavigate={navigate} onChoose={()=>fileInput.current?.click()} onDrop={onDrop} dragging={dragging} setDragging={setDragging}/>}
     {page==="send"&&<SendPage transfers={transfers} sendText={sendText} setSendText={setSendText} onChoose={()=>fileInput.current?.click()} onDrop={onDrop} dragging={dragging} setDragging={setDragging} onCopy={()=>{if(!sendText.trim())return;navigator.clipboard?.writeText(sendText);toastMessage("Text copied to clipboard");}}/>}
-    {page==="devices"&&<DevicesPage onPair={()=>setPairingOpen(true)}/>}
+    {page==="devices"&&<DevicesPage onPair={()=>setPairingOpen(true)} peerStatus={peerStatus} peerBusy={peerBusy} peerError={peerError} onStartPeer={startPeerTransport} onStopPeer={stopPeerTransport}/>}
     {page==="clipboard"&&<ClipboardPage items={clipboardItems} enabled={clipboardSync} onToggle={()=>setClipboardSync(v=>!v)} onClear={()=>setClipboardItems([])} onCopy={value=>{navigator.clipboard?.writeText(value);toastMessage("Copied");}}/>}
     {page==="activity"&&<ActivityPage transfers={transfers}/>}
     {page==="settings"&&<SettingsPage theme={theme} setTheme={value=>setTheme(value)} reducedMotion={reducedMotion} setReducedMotion={setReducedMotion} clipboardSync={clipboardSync} setClipboardSync={setClipboardSync} onSave={()=>{setSettingsSaved(true);toastMessage("Preferences saved for this session");}} settingsSaved={settingsSaved}/>}
@@ -152,11 +170,21 @@ function SendPage({transfers,sendText,setSendText,onChoose,onDrop,dragging,setDr
  </div>;
 }
 
-function DevicesPage({onPair}:{onPair:()=>void}){
+function DevicesPage({onPair,peerStatus,peerBusy,peerError,onStartPeer,onStopPeer}:{onPair:()=>void;peerStatus:PeerTransportStatus;peerBusy:boolean;peerError:string;onStartPeer:()=>void;onStopPeer:()=>void}){
  return <div className="page-stack"><PageHeading eyebrow="TRUSTED CONNECTIONS" title="Your devices." subtitle="Only devices you pair and trust can exchange content with you." action={<button className="button button-primary" onClick={onPair}><Plus size={16}/> Pair a device</button>}/>
-  <div className="device-list-card surface-card"><DeviceRow icon={<Monitor size={20}/>} name="This Windows PC" description="Current app · Local preview" current/><div className="device-security-foot"><ShieldCheck size={16}/><span>No remote devices are paired yet. Pairing will be enabled with the native transport.</span></div></div>
+  <div className="device-list-card surface-card"><DeviceRow icon={<Monitor size={20}/>} name="This Windows PC" description="Current app · Local preview" current/><div className="device-security-foot"><ShieldCheck size={16}/><span>No remote devices are paired yet. Pairing will be enabled after the authenticated handshake is implemented.</span></div></div>
+  <PeerTransportCard status={peerStatus} busy={peerBusy} error={peerError} onStart={onStartPeer} onStop={onStopPeer}/>
   <section className="surface-card pairing-info"><div className="pairing-info-icon"><QrCode size={19}/></div><div><h3>Pairing that stays in your hands</h3><p>Bridge will use a short-lived pairing code and a device confirmation step. Never approve a code you didn't request.</p></div></section>
  </div>;
+}
+function PeerTransportCard({status,busy,error,onStart,onStop}:{status:PeerTransportStatus;busy:boolean;error:string;onStart:()=>void;onStop:()=>void}){
+ return <section className="surface-card peer-transport-card">
+  <div className="peer-transport-head"><div className="peer-transport-icon"><Wifi size={18}/></div><div className="peer-transport-copy"><strong>Peer network engine</strong><span>{status.running?"Local endpoint is running":"Not started on this device"}</span></div><span className={cx("transport-state",status.running&&"transport-state-on")}><i/>{status.running?"Running":"Stopped"}</span></div>
+  {status.endpointId&&<div className="peer-id-row"><span>EPHEMERAL PEER ID</span><code>{status.endpointId}</code></div>}
+  <p className="peer-transport-description">Starts the native iroh/QUIC endpoint. This exposes a network identity for the current app session; it does not yet pair another device or transfer files. The identity is regenerated after restart until secure key storage is added.</p>
+  {error&&<p className="peer-error">{error}</p>}
+  <div className="peer-transport-actions">{status.running?<button className="button button-secondary" onClick={onStop} disabled={busy}><X size={14}/>{busy?"Stopping…":"Stop peer engine"}</button>:<button className="button button-primary" onClick={onStart} disabled={busy}><Wifi size={14}/>{busy?"Starting…":"Start peer engine"}</button>}<span><LockKeyhole size={12}/> Pairing approval is a separate step</span></div>
+ </section>;
 }
 function DeviceRow({icon,name,description,current=false}:{icon:ReactNode;name:string;description:string;current?:boolean}){
  return <div className="device-row"><div className="device-icon-wrap">{icon}</div><div className="device-row-copy"><strong>{name}</strong><span>{description}</span></div>{current?<span className="current-device-label">This device</span>:<span className="device-badge"><i/> Trusted</span>}</div>;
