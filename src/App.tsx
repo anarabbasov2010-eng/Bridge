@@ -8,6 +8,7 @@ import {
  Send, Settings2, ShieldCheck, Smartphone, Sun, Trash2, Upload, Wifi, X
 } from "lucide-react";
 import { clampSupportMessage, formatBytes, SUPPORT_MESSAGE_LIMIT, SUPPORT_SCREENSHOT_LIMIT, validateScreenshot } from "./lib/validation";
+import { loadPreferences, savePreferences } from "./lib/preferences";
 
 type Page="home"|"send"|"devices"|"clipboard"|"activity"|"settings"|"help";
 type Theme="light"|"dark"|"system";
@@ -33,14 +34,15 @@ function cx(...values:Array<string|false|undefined>){return values.filter(Boolea
 
 function App(){
  const prefersReduced=useReducedMotion();
+ const [preferences]=useState(loadPreferences);
  const [page,setPage]=useState<Page>("home");
- const [theme,setTheme]=useState<Theme>("light");
+ const [theme,setTheme]=useState<Theme>(preferences.theme);
  const [dark,setDark]=useState(false);
- const [reducedMotion,setReducedMotion]=useState(Boolean(prefersReduced));
- const [sidebarOpen,setSidebarOpen]=useState(true);
+ const [reducedMotion,setReducedMotion]=useState(preferences.reducedMotion || Boolean(prefersReduced));
+ const [sidebarOpen,setSidebarOpen]=useState(!preferences.sidebarCollapsed);
  const [transfers,setTransfers]=useState(initialTransfers);
  const [clipboardItems,setClipboardItems]=useState(initialClipboard);
- const [clipboardSync,setClipboardSync]=useState(false);
+ const [clipboardSync,setClipboardSync]=useState(preferences.clipboardSync);
  const [message,setMessage]=useState("");
  const [attachments,setAttachments]=useState<Attachment[]>([]);
  const [supportStatus,setSupportStatus]=useState("");
@@ -57,6 +59,9 @@ function App(){
  const [peerProbe,setPeerProbe]=useState<PeerProbe|null>(null);
  const [peerProbeBusy,setPeerProbeBusy]=useState(false);
  const [peerProbeError,setPeerProbeError]=useState("");
+ useEffect(()=>{
+  savePreferences({theme,reducedMotion,clipboardSync,sidebarCollapsed:!sidebarOpen});
+ },[theme,reducedMotion,clipboardSync,sidebarOpen]);
  useEffect(()=>{invoke<PeerTransportStatus>("get_peer_transport_status").then(setPeerStatus).catch(()=>{});},[]);
  const startPeerTransport=async()=>{
   setPeerBusy(true);setPeerError("");
@@ -147,7 +152,7 @@ function App(){
     {page==="devices"&&<DevicesPage onPair={()=>setPairingOpen(true)} peerStatus={peerStatus} peerBusy={peerBusy} peerError={peerError} onStartPeer={startPeerTransport} onStopPeer={stopPeerTransport} peerTargetId={peerTargetId} setPeerTargetId={setPeerTargetId} peerProbe={peerProbe} peerProbeBusy={peerProbeBusy} peerProbeError={peerProbeError} onProbePeer={probePeerEndpoint} onCopyPeerId={copyLocalPeerId}/>}
     {page==="clipboard"&&<ClipboardPage items={clipboardItems} enabled={clipboardSync} onToggle={()=>setClipboardSync(v=>!v)} onClear={()=>setClipboardItems([])} onCopy={value=>{navigator.clipboard?.writeText(value);toastMessage("Copied");}}/>}
     {page==="activity"&&<ActivityPage transfers={transfers}/>}
-    {page==="settings"&&<SettingsPage theme={theme} setTheme={value=>setTheme(value)} reducedMotion={reducedMotion} setReducedMotion={setReducedMotion} clipboardSync={clipboardSync} setClipboardSync={setClipboardSync} onSave={()=>{setSettingsSaved(true);toastMessage("Preferences saved for this session");}} settingsSaved={settingsSaved}/>}
+    {page==="settings"&&<SettingsPage theme={theme} setTheme={value=>setTheme(value)} reducedMotion={reducedMotion} setReducedMotion={setReducedMotion} clipboardSync={clipboardSync} setClipboardSync={setClipboardSync} onSave={()=>{setSettingsSaved(true);toastMessage("Preferences saved on this device");}} settingsSaved={settingsSaved}/>}
     {page==="help"&&<HelpPage message={message} setMessage={value=>{setMessage(clampSupportMessage(value));setSupportStatus("");}} attachments={attachments} onAttach={()=>supportInput.current?.click()} onRemoveAttachment={removeAttachment} onEmail={openSupportEmail} supportStatus={supportStatus} faqOpen={faqOpen} setFaqOpen={setFaqOpen}/>}
    </motion.div></AnimatePresence></div>
    <footer className="statusbar"><span><span className="status-dot"/> All systems local in this preview</span><span>Made for your devices <span className="status-heart">·</span> Help is always close</span></footer>
@@ -239,7 +244,7 @@ function SettingsPage({theme,setTheme,reducedMotion,setReducedMotion,clipboardSy
   <SettingsGroup title="Motion" description="Keep transitions gentle, or reduce movement across the app."><SettingLine title="Reduced motion" subtitle="Shorten or remove interface movement"><Toggle value={reducedMotion} onChange={setReducedMotion}/></SettingLine></SettingsGroup>
   <SettingsGroup title="Privacy" description="Sharing features stay off until you enable them."><SettingLine title="Clipboard sharing" subtitle="Allow selected clipboard items to move between trusted devices"><Toggle value={clipboardSync} onChange={setClipboardSync}/></SettingLine><div className="settings-note"><LockKeyhole size={15}/> No background clipboard monitoring is enabled in this preview.</div></SettingsGroup>
   <SettingsGroup title="About Bridge" description="A free utility built around your devices."><SettingLine title="Version" subtitle="0.1.0 · Early preview" right={<span className="setting-value">Preview</span>}/><SettingLine title="Support" subtitle="Telegram @vvpse · linka.comp@gmail.com" right={<span className="setting-value">Available</span>}/></SettingsGroup>
-  <div className="save-settings-row"><span>{settingsSaved?"Your preferences are saved for this session.":"Changes apply immediately in this preview."}</span><button className="button button-primary" onClick={onSave}><Check size={15}/> Save preferences</button></div>
+  <div className="save-settings-row"><span>{settingsSaved?"Your preferences are saved on this device.":"Changes are saved locally as you make them."}</span><button className="button button-primary" onClick={onSave}><Check size={15}/> Save preferences</button></div>
  </div>;
 }
 function SettingsGroup({title,description,children}:{title:string;description:string;children:ReactNode}){return <section className="surface-card settings-group"><div className="settings-group-heading"><h3>{title}</h3><p>{description}</p></div>{children}</section>;}
