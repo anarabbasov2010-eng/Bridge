@@ -5,7 +5,7 @@ import {
  Activity, ArrowLeftRight, ArrowUpRight, Check, CheckCheck, ChevronDown, ChevronRight,
  CircleHelp, Clipboard, Clock3, Copy, File, FileImage, FileText, Files, FolderOpen,
  LockKeyhole, Mail, Menu, MessageCircle, Monitor, Moon, PanelLeftClose, Plus, QrCode,
- Send, Settings2, ShieldCheck, Smartphone, Sun, Trash2, Upload, Wifi, X
+ Send, Settings2, ShieldCheck, Smartphone, Sun, Trash2, Upload, Wifi, X, RefreshCw, KeyRound
 } from "lucide-react";
 import { clampSupportMessage, formatBytes, SUPPORT_MESSAGE_LIMIT, SUPPORT_SCREENSHOT_LIMIT, validateScreenshot } from "./lib/validation";
 import { loadPreferences, savePreferences } from "./lib/preferences";
@@ -82,7 +82,7 @@ function App(){
  };
  const stopPeerTransport=async()=>{
   setPeerBusy(true);setPeerError("");
-  try{const status=await invoke<PeerTransportStatus>("stop_peer_transport");setPeerStatus(status);toastMessage("Peer endpoint stopped.");}
+  try{const status=await invoke<PeerTransportStatus>("stop_peer_transport");setPeerStatus(status);setTrustedDevices([]);setPairingInvite(null);setPeerProbe(null);toastMessage("Peer endpoint stopped. Session pairings were cleared.");}
   catch(error){setPeerError(typeof error==="string"?error:"Could not stop the native peer endpoint.");}
   finally{setPeerBusy(false);}
  };
