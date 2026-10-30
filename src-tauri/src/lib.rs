@@ -2,7 +2,9 @@ mod transport;
 
 use serde::Serialize;
 use tauri::State;
-use transport::{PeerProbe, PeerTransport, TransportStatus};
+use transport::{
+    PairingInviteInfo, PeerProbe, PeerTransport, TransportStatus, TrustedPeer,
+};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +54,33 @@ async fn probe_peer_endpoint(
     state.probe_peer(remote_endpoint_id).await
 }
 
+#[tauri::command]
+fn create_pairing_invite(state: State<'_, PeerTransport>) -> Result<PairingInviteInfo, String> {
+    state.create_pairing_invite()
+}
+
+#[tauri::command]
+async fn pair_with_endpoint(
+    state: State<'_, PeerTransport>,
+    remote_endpoint_id: String,
+    pairing_code: String,
+) -> Result<TrustedPeer, String> {
+    state.pair_with_endpoint(remote_endpoint_id, pairing_code).await
+}
+
+#[tauri::command]
+fn get_trusted_devices(state: State<'_, PeerTransport>) -> Result<Vec<TrustedPeer>, String> {
+    state.trusted_devices()
+}
+
+#[tauri::command]
+fn remove_trusted_device(
+    state: State<'_, PeerTransport>,
+    endpoint_id: String,
+) -> Result<bool, String> {
+    state.remove_trusted_device(&endpoint_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -61,7 +90,11 @@ pub fn run() {
             start_peer_transport,
             stop_peer_transport,
             get_peer_transport_status,
-            probe_peer_endpoint
+            probe_peer_endpoint,
+            create_pairing_invite,
+            pair_with_endpoint,
+            get_trusted_devices,
+            remove_trusted_device
         ])
         .run(tauri::generate_context!())
         .expect("error while running Bridge");
