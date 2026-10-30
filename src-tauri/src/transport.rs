@@ -122,6 +122,7 @@ pub struct TransferReceipt {
     pub size_bytes: u64,
     pub sha256: String,
     pub remote_endpoint_id: String,
+    pub direction: String,
     pub completed_at_unix: u64,
 }
 
@@ -654,6 +655,7 @@ impl PeerTransport {
             size_bytes: selected.size_bytes,
             sha256,
             remote_endpoint_id: remote_id.to_string(),
+            direction: "sent".to_string(),
             completed_at_unix: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
         };
         let _ = app.emit("bridge:file-transfer-complete", &receipt);
@@ -937,6 +939,7 @@ async fn run_accept_loop(
                         size_bytes,
                         sha256,
                         remote_endpoint_id,
+                        direction: "received".to_string(),
                         completed_at_unix: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
                     });
                 }

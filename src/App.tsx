@@ -20,6 +20,10 @@ type SelectedFile={id:string;name:string;sizeLabel:string;sizeBytes?:number;nati
 type SelectedFileInfo={id:string;fileName:string;sizeBytes:number};
 type IncomingFileOffer={offerId:string;senderEndpointId:string;fileName:string;sizeBytes:number;sha256:string};
 type TransferProgress={transferId:string;fileName:string;direction:string;transferredBytes:number;totalBytes:number};
+type TransferReceipt={transferId:string;fileName:string;sizeBytes:number;sha256:string;remoteEndpointId:string;direction:"sent"|"received";completedAtUnix:number};
+type SelectedFileInfo={id:string;fileName:string;sizeBytes:number};
+type IncomingFileOffer={offerId:string;senderEndpointId:string;fileName:string;sizeBytes:number;sha256:string};
+type TransferProgress={transferId:string;fileName:string;direction:string;transferredBytes:number;totalBytes:number};
 type TransferReceipt={transferId:string;fileName:string;sizeBytes:number;sha256:string;remoteEndpointId:string;completedAtUnix:number};
 type PeerTransportStatus={running:boolean;endpointId:string|null;identityPersisted:boolean};
 type PeerProbe={connected:boolean;remoteEndpointId:string;protocolVersion:number;message:string};
@@ -179,12 +183,12 @@ function App(){
    listen<TransferProgress>("bridge:file-transfer-progress",event=>setTransferProgress(event.payload)),
    listen<TransferReceipt>("bridge:file-transfer-complete",event=>{
     const receipt=event.payload;
-    setTransfers(current=>[{
+    setTransfers(current=>current.some(item=>item.id===receipt.transferId)?current:[{
      id:receipt.transferId,name:receipt.fileName,size:formatBytes(receipt.sizeBytes),
-     time:new Date(receipt.completedAtUnix*1000).toLocaleString(),state:"Complete",direction:receipt.remoteEndpointId===peerStatus.endpointId?"received":"received"
+     time:new Date(receipt.completedAtUnix*1000).toLocaleString(),state:"Complete",direction:receipt.direction
     },...current]);
     setTransferProgress(null);
-    toastMessage("A file was received and verified.");
+    toastMessage(receipt.direction==="sent"?"File sent and verified.":"A file was received and verified.");
    })
   ]).then(cleanups=>{
    if(!active)cleanups.forEach(cleanup=>cleanup());
@@ -226,10 +230,10 @@ function App(){
      let name=normalized.split("/").pop()||"Selected file";
      try{name=decodeURIComponent(name);}catch{/* Keep the original URI segment. */}
      if(name.includes(":"))name=name.split(":").pop()||name;
-     return {id:`browser-dialog-${Date.now()}-${index}`,name,sizeLabel:"Browser selection · not available to native transfer",native:false};
+     return {id:`browser-dialog-${Date.now()}-${index}`,name,sizeLabel:"Selected in browser · unavailable to native transfer",native:false};
     });
     setSelectedFiles(current=>[...current,...entries]);
-    toastMessage(`${entries.length} file${entries.length>1?"s":""} selected in the browser`);
+    toastMessage(`${entries.length} file${entries.length>1?"s":""} selected; open Bridge on Windows or Android to send`);
     navigate("send");
    }catch{fileInput.current?.click();}
   }
@@ -260,9 +264,9 @@ function App(){
      remoteEndpointId:sendRecipientId,
      selectedFileId:item.id
     });
-    setTransfers(current=>[{
+    setTransfers(current=>current.some(item=>item.id===receipt.transferId)?current:[{
      id:receipt.transferId,name:receipt.fileName,size:formatBytes(receipt.sizeBytes),
-     time:new Date(receipt.completedAtUnix*1000).toLocaleString(),state:"Complete",direction:"sent"
+     time:new Date(receipt.completedAtUnix*1000).toLocaleString(),state:"Complete",direction:receipt.direction
     },...current]);
     setSelectedFiles(current=>current.filter(file=>file.id!==item.id));
     completed+=1;
