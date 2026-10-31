@@ -1296,7 +1296,7 @@ async fn receive_file_payload(
         }
     };
     if copied != expected_size {
-        let cleanup = remove_partial_destination(app, &destination);
+        let cleanup = remove_partial_destination(&destination);
         let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(match cleanup {
             Ok(()) => format!("The destination received {copied} of {expected_size} bytes; the incomplete file was removed."),
@@ -1304,7 +1304,7 @@ async fn receive_file_payload(
         });
     }
     if let Err(error) = output.flush().await {
-        let cleanup = remove_partial_destination(app, &destination);
+        let cleanup = remove_partial_destination(&destination);
         let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(match cleanup {
             Ok(()) => format!("Could not flush the destination file; the incomplete file was removed: {error}"),
