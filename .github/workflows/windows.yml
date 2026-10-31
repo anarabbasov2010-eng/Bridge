@@ -22,6 +22,8 @@ jobs:
         run: choco install -y nsis
       - run: npm install
       - run: npx tauri icon src-tauri/icons/bridge.svg --output src-tauri/icons
+      - name: Run Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
       - run: npm run test
       - run: npm run build
       - name: Build Windows installer
