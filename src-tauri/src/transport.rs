@@ -1,4 +1,4 @@
-use iroh::{endpoint::presets, Endpoint, EndpointId, endpoint::Connection};
+use iroh::{endpoint::presets, Endpoint, EndpointId, SecretKey, endpoint::Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use subtle::ConstantTimeEq;
+use tauri_plugin_secure_keystore::{ItemKey, SecureKeystoreExt, SetItemRequest};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_fs::{FilePath, FsExt, OpenOptions as FsOpenOptions};
@@ -26,6 +27,9 @@ const MAX_FILE_NAME_BYTES: usize = 240;
 const FILE_CHUNK_SIZE: usize = 128 * 1024;
 const FILE_OFFER_TTL: Duration = Duration::from_secs(120);
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+const PEER_SECRET_KEY_NAME: &str = "bridge.iroh.secret-key.v1";
+const TRUSTED_PEERS_KEY_NAME: &str = "bridge.trusted-devices.v1";
+const MAX_TRUSTED_PEERS: usize = 20;
 
 #[derive(Default)]
 pub struct PeerTransport {
@@ -79,7 +83,7 @@ pub struct PairingInviteInfo {
     pub expires_in_seconds: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrustedPeer {
     pub endpoint_id: String,
@@ -191,7 +195,19 @@ impl PeerTransport {
             return Ok(status);
         }
 
+        let secret_key = load_or_create_peer_secret(&app)?;
+        let restored_peers = load_trusted_peers(&app)?;
+        {
+            let mut peers = self.trusted_peers.lock()
+                .map_err(|_| "Bridge trusted-device state is unavailable".to_string())?;
+            peers.clear();
+            for peer in restored_peers {
+                peers.insert(peer.endpoint_id.clone(), peer);
+            }
+        }
+
         let endpoint = Endpoint::builder(presets::N0)
+            .secret_key(secret_key)
             .alpns(vec![BRIDGE_ALPN.to_vec()])
             .bind()
             .await
@@ -240,9 +256,6 @@ impl PeerTransport {
 
         *self.pairing_invite.lock()
             .map_err(|_| "Bridge pairing state is unavailable".to_string())? = None;
-        self.trusted_peers.lock()
-            .map_err(|_| "Bridge trusted-device state is unavailable".to_string())?
-            .clear();
         self.pending_file_offers.lock()
             .map_err(|_| "Bridge incoming transfer state is unavailable".to_string())?
             .clear();
@@ -431,6 +444,7 @@ impl PeerTransport {
 
     pub async fn pair_with_endpoint(
         &self,
+        app: AppHandle,
         remote_endpoint_id: String,
         pairing_code: String,
     ) -> Result<TrustedPeer, String> {
@@ -469,9 +483,20 @@ impl PeerTransport {
 
         connection.close(0u32.into(), b"Bridge pairing complete");
         let trusted = TrustedPeer::new(remote_id.to_string());
-        self.trusted_peers.lock()
-            .map_err(|_| "Bridge trusted-device state is unavailable".to_string())?
-            .insert(trusted.endpoint_id.clone(), trusted.clone());
+        {
+            let mut peers = self.trusted_peers.lock()
+                .map_err(|_| "Bridge trusted-device state is unavailable".to_string())?;
+            if peers.len() >= MAX_TRUSTED_PEERS && !peers.contains_key(&trusted.endpoint_id) {
+                return Err(format!("Bridge supports up to {MAX_TRUSTED_PEERS} trusted devices on this installation."));
+            }
+            peers.insert(trusted.endpoint_id.clone(), trusted.clone());
+        }
+        if let Err(error) = persist_trusted_peers(&app, &self.trusted_peers) {
+            if let Ok(mut peers) = self.trusted_peers.lock() {
+                peers.remove(&trusted.endpoint_id);
+            }
+            return Err(format!("The pairing succeeded, but the trusted-device record could not be saved securely: {error}"));
+        }
         Ok(trusted)
     }
 
@@ -485,10 +510,15 @@ impl PeerTransport {
         Ok(peers)
     }
 
-    pub fn remove_trusted_device(&self, endpoint_id: &str) -> Result<bool, String> {
-        self.trusted_peers.lock()
-            .map_err(|_| "Bridge trusted-device state is unavailable".to_string())
-            .map(|mut peers| peers.remove(endpoint_id).is_some())
+    pub fn remove_trusted_device(&self, app: &AppHandle, endpoint_id: &str) -> Result<bool, String> {
+        let removed = self.trusted_peers.lock()
+            .map_err(|_| "Bridge trusted-device state is unavailable".to_string())?
+            .remove(endpoint_id)
+            .is_some();
+        if removed {
+            persist_trusted_peers(app, &self.trusted_peers)?;
+        }
+        Ok(removed)
     }
 
     pub async fn send_file_to_peer(
@@ -705,6 +735,90 @@ impl From<FileOfferRequest> for ControlRequest {
             sha256: Some(value.sha256),
         }
     }
+}
+
+fn load_or_create_peer_secret(app: &AppHandle) -> Result<SecretKey, String> {
+    let stored = app.secure_keystore()
+        .get_item(ItemKey { key: PEER_SECRET_KEY_NAME.to_string() })
+        .map_err(|error| format!("Could not access the Windows Credential Manager / Android Keystore: {error}"))?;
+
+    if let Some(value) = stored.value {
+        return decode_secret_key(&value);
+    }
+
+    let secret_key = SecretKey::generate();
+    let value = encode_hex(&secret_key.to_bytes());
+    app.secure_keystore()
+        .set_item(SetItemRequest {
+            key: PEER_SECRET_KEY_NAME.to_string(),
+            value,
+        })
+        .map_err(|error| format!("Could not persist the Bridge device identity in the OS secure store: {error}"))?;
+    Ok(secret_key)
+}
+
+fn decode_secret_key(value: &str) -> Result<SecretKey, String> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("The saved Bridge device identity is invalid. It was not replaced automatically.".to_string());
+    }
+    let mut bytes = [0u8; 32];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let hex = std::str::from_utf8(chunk)
+            .map_err(|_| "The saved Bridge device identity is malformed.".to_string())?;
+        bytes[index] = u8::from_str_radix(hex, 16)
+            .map_err(|_| "The saved Bridge device identity is malformed.".to_string())?;
+    }
+    Ok(SecretKey::from_bytes(&bytes))
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn load_trusted_peers(app: &AppHandle) -> Result<Vec<TrustedPeer>, String> {
+    let stored = app.secure_keystore()
+        .get_item(ItemKey { key: TRUSTED_PEERS_KEY_NAME.to_string() })
+        .map_err(|error| format!("Could not read trusted devices from the OS secure store: {error}"))?;
+    match stored.value {
+        Some(value) => {
+            let peers: Vec<TrustedPeer> = serde_json::from_str(&value)
+                .map_err(|error| format!("The saved trusted-device list is invalid and was not discarded: {error}"))?;
+            if peers.len() > MAX_TRUSTED_PEERS {
+                return Err("The saved trusted-device list exceeds the supported device limit.".to_string());
+            }
+            Ok(peers)
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+fn persist_trusted_peers(
+    app: &AppHandle,
+    peers: &Mutex<HashMap<String, TrustedPeer>>,
+) -> Result<(), String> {
+    let mut devices: Vec<TrustedPeer> = peers.lock()
+        .map_err(|_| "Bridge trusted-device state is unavailable".to_string())?
+        .values()
+        .cloned()
+        .collect();
+    if devices.len() > MAX_TRUSTED_PEERS {
+        return Err(format!("Bridge supports up to {MAX_TRUSTED_PEERS} trusted devices on this installation."));
+    }
+    devices.sort_by(|left, right| left.endpoint_id.cmp(&right.endpoint_id));
+    let serialized = serde_json::to_string(&devices)
+        .map_err(|error| format!("Could not encode trusted-device records: {error}"))?;
+    app.secure_keystore()
+        .set_item(SetItemRequest {
+            key: TRUSTED_PEERS_KEY_NAME.to_string(),
+            value: serialized,
+        })
+        .map_err(|error| format!("Could not securely store trusted devices: {error}"))
 }
 
 fn parse_endpoint_id(value: &str) -> Result<EndpointId, String> {
