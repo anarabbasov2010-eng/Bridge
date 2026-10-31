@@ -62,11 +62,12 @@ fn create_pairing_invite(state: State<'_, PeerTransport>) -> Result<PairingInvit
 
 #[tauri::command]
 async fn pair_with_endpoint(
+    app: AppHandle,
     state: State<'_, PeerTransport>,
     remote_endpoint_id: String,
     pairing_code: String,
 ) -> Result<TrustedPeer, String> {
-    state.pair_with_endpoint(remote_endpoint_id, pairing_code).await
+    state.pair_with_endpoint(app, remote_endpoint_id, pairing_code).await
 }
 
 #[tauri::command]
@@ -76,10 +77,11 @@ fn get_trusted_devices(state: State<'_, PeerTransport>) -> Result<Vec<TrustedPee
 
 #[tauri::command]
 fn remove_trusted_device(
+    app: AppHandle,
     state: State<'_, PeerTransport>,
     endpoint_id: String,
 ) -> Result<bool, String> {
-    state.remove_trusted_device(&endpoint_id)
+    state.remove_trusted_device(&app, &endpoint_id)
 }
 
 #[tauri::command]
@@ -127,6 +129,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_secure_keystore::init())
         .manage(PeerTransport::default())
         .invoke_handler(tauri::generate_handler![
             get_runtime_info,

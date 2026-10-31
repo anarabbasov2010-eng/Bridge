@@ -21,3 +21,4 @@ subtle = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 uuid = { version = "1", features = ["v4"] }
+tauri-plugin-secure-keystore = "=0.0.2"
