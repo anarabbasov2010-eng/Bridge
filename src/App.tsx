@@ -90,13 +90,13 @@ function App(){
  useEffect(()=>{invoke<TrustedDevice[]>("get_trusted_devices").then(setTrustedDevices).catch(()=>{});},[]);
  const startPeerTransport=async()=>{
   setPeerBusy(true);setPeerError("");
-  try{const status=await invoke<PeerTransportStatus>("start_peer_transport");setPeerStatus(status);toastMessage("Bridge peer engine started. You can now pair and transfer files.");}
+  try{const status=await invoke<PeerTransportStatus>("start_peer_transport");setPeerStatus(status);const saved=await invoke<TrustedDevice[]>("get_trusted_devices");setTrustedDevices(saved);toastMessage("Bridge is online. Your saved device identity and trusted devices were restored.");}
   catch(error){setPeerError(typeof error==="string"?error:"Native peer networking is available inside the installed Bridge app.");}
   finally{setPeerBusy(false);}
  };
  const stopPeerTransport=async()=>{
   setPeerBusy(true);setPeerError("");
-  try{const status=await invoke<PeerTransportStatus>("stop_peer_transport");setPeerStatus(status);setTrustedDevices([]);setPairingInvite(null);setPeerProbe(null);setIncomingOffers([]);setTransferProgress(null);setSelectedFiles([]);toastMessage("Peer endpoint stopped. Session pairings and queued file tokens were cleared.");}
+  try{const status=await invoke<PeerTransportStatus>("stop_peer_transport");setPeerStatus(status);setPairingInvite(null);setPeerProbe(null);setIncomingOffers([]);setTransferProgress(null);setSelectedFiles([]);toastMessage("Peer engine stopped. Your saved trusted devices remain available.");}
   catch(error){setPeerError(typeof error==="string"?error:"Could not stop the native peer endpoint.");}
   finally{setPeerBusy(false);}
  };
@@ -415,14 +415,14 @@ function PairingPanel({running,invite,inviteBusy,onCreateInvite,onCopyCode,devic
  </section>;
 }
 function TrustedDevicesPanel({devices,busy,onRefresh,onRemove}:{devices:TrustedDevice[];busy:boolean;onRefresh:()=>void;onRemove:(id:string)=>void}){
- return <section className="surface-card trusted-devices-panel"><div className="section-title"><h2>Paired this session</h2><button className="text-button" onClick={onRefresh} disabled={busy}><RefreshCw size={13}/>{busy?"Refreshing…":"Refresh"}</button></div>
+ return <section className="surface-card trusted-devices-panel"><div className="section-title"><h2>Trusted devices</h2><button className="text-button" onClick={onRefresh} disabled={busy}><RefreshCw size={13}/>{busy?"Refreshing…":"Refresh"}</button></div>
   {devices.length?devices.map(device=><div className="trusted-device-row" key={device.endpointId}><div className="device-icon-wrap phone"><Smartphone size={17}/></div><div><strong>{`Device ${device.endpointId.slice(0,10)}…`}</strong><span>{`Paired ${new Date(device.pairedAtUnix*1000).toLocaleString()}`}</span><code>{device.endpointId}</code></div><button className="icon-button" onClick={()=>onRemove(device.endpointId)} aria-label="Remove paired device"><Trash2 size={15}/></button></div>):<div className="empty-inline"><ShieldCheck size={17}/> No devices paired in this session yet.</div>}
  </section>;
 }
 function PeerTransportCard({status,busy,error,onStart,onStop,onCopyPeerId,peerTargetId,setPeerTargetId,peerProbe,peerProbeBusy,peerProbeError,onProbePeer}:{status:PeerTransportStatus;busy:boolean;error:string;onStart:()=>void;onStop:()=>void;onCopyPeerId:()=>void;peerTargetId:string;setPeerTargetId:(v:string)=>void;peerProbe:PeerProbe|null;peerProbeBusy:boolean;peerProbeError:string;onProbePeer:()=>void}){
  return <section className="surface-card peer-transport-card">
   <div className="peer-transport-head"><div className="peer-transport-icon"><Wifi size={18}/></div><div className="peer-transport-copy"><strong>Peer network engine</strong><span>{status.running?"Accepting encrypted Bridge control connections":"Not started on this device"}</span></div><span className={cx("transport-state",status.running&&"transport-state-on")}><i/>{status.running?"Running":"Stopped"}</span></div>
-  {status.endpointId&&<div className="peer-id-row"><span>YOUR DEVICE ID · TEMPORARY UNTIL SECURE KEY STORAGE IS ADDED</span><div><code>{status.endpointId}</code><button className="icon-button" onClick={onCopyPeerId} aria-label="Copy this device ID"><Copy size={15}/></button></div></div>}
+  {status.endpointId&&<div className="peer-id-row"><span>YOUR STABLE DEVICE ID · SAVED IN THE OS SECURE STORE</span><div><code>{status.endpointId}</code><button className="icon-button" onClick={onCopyPeerId} aria-label="Copy this device ID"><Copy size={15}/></button></div></div>}
   <p className="peer-transport-description">The native iroh/QUIC endpoint accepts a versioned Bridge control handshake. The encrypted connection authenticates the endpoint key. This network engine is required for pairing and will later carry file streams.</p>
   {error&&<p className="peer-error">{error}</p>}
   <div className="peer-transport-actions">{status.running?<button className="button button-secondary" onClick={onStop} disabled={busy}><X size={14}/>{busy?"Stopping…":"Stop peer engine"}</button>:<button className="button button-primary" onClick={onStart} disabled={busy}><Wifi size={14}/>{busy?"Starting…":"Start peer engine"}</button>}<span><LockKeyhole size={12}/> Encrypted peer identity</span></div>

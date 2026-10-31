@@ -221,7 +221,7 @@ impl PeerTransport {
                 Some(TransportStatus {
                     running: true,
                     endpoint_id: Some(existing.id().to_string()),
-                    identity_persisted: false,
+                    identity_persisted: true,
                 })
             } else {
                 *slot = Some(endpoint.clone());
@@ -1114,14 +1114,36 @@ async fn run_accept_loop(
                         .unwrap_or(false);
                     if accepted {
                         let peer = TrustedPeer::new(remote_endpoint_id.clone());
-                        if let Ok(mut devices) = trusted_peers.lock() {
-                            devices.insert(remote_endpoint_id.clone(), peer);
-                        }
-                        ControlResponse {
-                            message_type: "bridge.pair_ack".to_string(),
-                            protocol_version: PROTOCOL_VERSION,
-                            endpoint_id: local_endpoint_id.clone(),
-                            message: "This device was paired for the current app session.".to_string(),
+                        let can_insert = if let Ok(mut devices) = trusted_peers.lock() {
+                            if devices.len() >= MAX_TRUSTED_PEERS && !devices.contains_key(&remote_endpoint_id) {
+                                false
+                            } else {
+                                devices.insert(remote_endpoint_id.clone(), peer);
+                                true
+                            }
+                        } else {
+                            false
+                        };
+                        let persisted = can_insert && persist_trusted_peers(&app, &trusted_peers).is_ok();
+                        if persisted {
+                            ControlResponse {
+                                message_type: "bridge.pair_ack".to_string(),
+                                protocol_version: PROTOCOL_VERSION,
+                                endpoint_id: local_endpoint_id.clone(),
+                                message: "This device was paired and saved in the platform secure store.".to_string(),
+                            }
+                        } else {
+                            if can_insert {
+                                if let Ok(mut devices) = trusted_peers.lock() {
+                                    devices.remove(&remote_endpoint_id);
+                                }
+                            }
+                            ControlResponse {
+                                message_type: "bridge.pair_error".to_string(),
+                                protocol_version: PROTOCOL_VERSION,
+                                endpoint_id: local_endpoint_id.clone(),
+                                message: "The pairing code was valid, but this device could not securely save the trusted-device record or has reached its device limit.".to_string(),
+                            }
                         }
                     } else {
                         ControlResponse {
