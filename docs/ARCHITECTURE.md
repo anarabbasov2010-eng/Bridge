@@ -17,7 +17,7 @@ Bridge is a cross-device utility, not a cloud drive. The first product boundary 
 - Keep pairing tokens short-lived, single-use and rate-limited.
 - Validate filenames and never join untrusted paths without canonicalization.
 - Use temporary files, verify the complete digest, then atomically move into the destination.
-- Never overwrite an existing file silently.
+- Never overwrite an existing file silently. Ordinary filesystem destinations are opened with atomic create-new semantics; an existing path is rejected. Android content URIs are created by the system Save dialog and are then opened for writing.
 - Apply per-file and total-queue limits with clear user-facing errors.
 - Never log file content, clipboard content, pairing secrets or private keys.
 - Clipboard sync must be opt-in, scoped to trusted devices and include a clear-history control.
@@ -33,7 +33,7 @@ Implemented in the current code:
 - Initial file transfer path: bounded offer, trusted-sender check, explicit receiver approval, native destination selection, 128 KiB QUIC streaming, a 5 GiB per-file cap, progress events, temporary staging and SHA-256 verification before copying received data to the selected destination.
 - UI actions for selecting a paired recipient, sending files, reviewing incoming requests, accepting / declining, monitoring progress and viewing verified transfer history.
 
-The transfer implementation is in early integration and must pass the platform CI builds and manual two-device tests before it is treated as release-ready. Endpoint keys and trusted-device records are process-local. The invitation is manually shared; camera scanning and deep-link auto-dispatch are not wired yet. Background / resumable transfers, persistent device identity, persistent trusted devices, conflict-safe destination handling across every Android document provider, share-sheet integration and OS clipboard integration remain unfinished. Browser file selections are not sent through the native peer transfer path.
+The transfer implementation is in early integration and must pass the platform CI builds and manual two-device tests before it is treated as release-ready. Endpoint keys and trusted-device records are process-local. The invitation is manually shared; camera scanning and deep-link auto-dispatch are not wired yet. Background / resumable transfers, persistent device identity, persistent trusted devices, cleanup of partial destination documents across every Android document provider, share-sheet integration and OS clipboard integration remain unfinished. Browser file selections are not sent through the native peer transfer path.
 
 Do not describe demo seed history as actual completed transfers.
 ## Motion and accessibility

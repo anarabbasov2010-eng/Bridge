@@ -34,7 +34,8 @@
 - [x] Bounded 128 KiB chunk streaming over QUIC
 - [x] SHA-256 verification before saving received data
 - [ ] Pause / resume / cancel
-- [ ] Atomic file finalization and collision resolution across desktop paths and Android content providers
+- [x] Reject silent overwrites for ordinary filesystem destinations using atomic create-new
+- [ ] Atomic finalization and partial-file cleanup across Android document providers
 - [ ] Large-file, interruption, retry and network-switch tests
 - [ ] Android background transfer behavior and notification UX
 

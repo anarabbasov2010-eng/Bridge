@@ -740,13 +740,33 @@ fn file_name_from_path(path: &FilePath) -> String {
 
 fn safe_file_name(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
+    let invalid_character = trimmed.chars().any(|ch| {
+        ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+    });
+    let reserved_stem = trimmed
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '.'])
+        .to_ascii_uppercase();
+    let reserved_device_name = matches!(
+        reserved_stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL"
+            | "COM1" | "COM2" | "COM3" | "COM4" | "COM5"
+            | "COM6" | "COM7" | "COM8" | "COM9"
+            | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5"
+            | "LPT6" | "LPT7" | "LPT8" | "LPT9"
+    );
+
     if trimmed.is_empty()
         || trimmed.len() > MAX_FILE_NAME_BYTES
         || trimmed == "."
         || trimmed == ".."
-        || trimmed.chars().any(|ch| ch.is_control() || ch == '/' || ch == '\\')
+        || trimmed.ends_with([' ', '.'])
+        || invalid_character
+        || reserved_device_name
     {
-        return Err("The file name is not safe to use.".to_string());
+        return Err("The file name is not safe to use on Windows and Android.".to_string());
     }
     Ok(trimmed.to_string())
 }
@@ -1188,7 +1208,7 @@ fn open_received_destination(app: &AppHandle, destination: &FilePath) -> Result<
     }
 }
 
-fn remove_partial_destination(app: &AppHandle, destination: &FilePath) -> Result<(), String> {
+fn remove_partial_destination(destination: &FilePath) -> Result<(), String> {
     match destination {
         FilePath::Path(path) => std::fs::remove_file(path)
             .map_err(|error| error.to_string()),
@@ -1212,7 +1232,7 @@ mod tests {
     #[test]
     fn file_offer_validation_accepts_empty_files_and_valid_metadata() {
         let id = Uuid::new_v4().to_string();
-        let empty_hash = format!("{:x}", Sha256::digest([]));
+        let empty_hash = format!("{:x}", Sha256::digest(b""));
         assert_eq!(
             validate_file_offer(&id, "empty.txt", 0, &empty_hash).expect("valid empty file"),
             "empty.txt"
@@ -1241,9 +1261,14 @@ mod tests {
     }
 
     #[test]
-    fn invalid_names_and_hashes_are_rejected() {
+    fn file_names_are_portable_and_reject_windows_device_names() {
         assert!(safe_file_name("../secret.txt").is_err());
-        assert!(safe_file_name("safe.txt").is_ok());
+        assert!(safe_file_name("folder\\\\secret.txt").is_err());
+        assert!(safe_file_name("notes?.txt").is_err());
+        assert!(safe_file_name("CON.txt").is_err());
+        assert!(safe_file_name("LPT1").is_err());
+        assert!(safe_file_name("trailing-dot.").is_err());
+        assert!(safe_file_name("safe-file_01.txt").is_ok());
         assert!(!is_sha256("abcd"));
         assert!(is_sha256(&"a".repeat(64)));
     }
