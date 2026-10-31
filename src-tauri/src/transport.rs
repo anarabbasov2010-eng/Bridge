@@ -1099,26 +1099,87 @@ async fn receive_file_payload(
         return Err(error);
     }
 
-    let mut options = FsOpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    let destination_file = match app.fs().open(destination, options) {
+    let destination_file = match open_received_destination(app, &destination) {
         Ok(file) => file,
         Err(error) => {
             let _ = tokio::fs::remove_file(&temp_path).await;
-            return Err(format!("The file was received and verified, but the chosen destination could not be opened: {error}"));
+            return Err(error);
         }
     };
     let mut input = tokio::fs::File::open(&temp_path).await
         .map_err(|error| format!("Could not reopen the verified temporary file: {error}"))?;
     let mut output = tokio::fs::File::from_std(destination_file);
-    let copy_result = tokio::io::copy(&mut input, &mut output).await;
-    if let Err(error) = copy_result {
+    let copied = match tokio::io::copy(&mut input, &mut output).await {
+        Ok(copied) => copied,
+        Err(error) => {
+            let cleanup = remove_partial_destination(app, &destination);
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(match cleanup {
+                Ok(()) => format!("The destination write failed and the incomplete file was removed: {error}"),
+                Err(cleanup_error) => format!("The destination write failed: {error}. The destination may contain a partial file; remove it manually ({cleanup_error})."),
+            });
+        }
+    };
+    if copied != expected_size {
+        let cleanup = remove_partial_destination(app, &destination);
         let _ = tokio::fs::remove_file(&temp_path).await;
-        return Err(format!("The file passed integrity checks but could not be written to the selected destination: {error}"));
+        return Err(match cleanup {
+            Ok(()) => format!("The destination received {copied} of {expected_size} bytes; the incomplete file was removed."),
+            Err(cleanup_error) => format!("The destination received {copied} of {expected_size} bytes. The destination may contain a partial file; remove it manually ({cleanup_error})."),
+        });
     }
-    output.flush().await.map_err(|error| format!("Could not flush the received file: {error}"))?;
+    if let Err(error) = output.flush().await {
+        let cleanup = remove_partial_destination(app, &destination);
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        return Err(match cleanup {
+            Ok(()) => format!("Could not flush the destination file; the incomplete file was removed: {error}"),
+            Err(cleanup_error) => format!("Could not flush the destination file: {error}. The destination may contain a partial file; remove it manually ({cleanup_error})."),
+        });
+    }
+    drop(output);
     let _ = tokio::fs::remove_file(&temp_path).await;
     Ok(())
+}
+
+fn open_received_destination(app: &AppHandle, destination: &FilePath) -> Result<std::fs::File, String> {
+    match destination {
+        FilePath::Path(path) => {
+            // create_new is atomic and refuses to overwrite an existing path or symlink.
+            let mut options = FsOpenOptions::new();
+            options.write(true).create_new(true);
+            app.fs().open(path.clone(), options)
+                .map_err(|error| format!("Could not create the destination without overwriting an existing file: {error}"))
+        }
+        FilePath::Url(url) if url.scheme() == "file" => {
+            let path = url.to_file_path()
+                .map_err(|_| "The selected file URL could not be converted to a safe destination path.".to_string())?;
+            let mut options = FsOpenOptions::new();
+            options.write(true).create_new(true);
+            app.fs().open(path, options)
+                .map_err(|error| format!("Could not create the destination without overwriting an existing file: {error}"))
+        }
+        FilePath::Url(_) => {
+            // Android's Save dialog returns a newly-created SAF content URI.
+            // SAF owns the document creation; the URI is opened for writing.
+            let mut options = FsOpenOptions::new();
+            options.write(true).truncate(true);
+            app.fs().open(destination.clone(), options)
+                .map_err(|error| format!("Could not open the Android document destination: {error}"))
+        }
+    }
+}
+
+fn remove_partial_destination(app: &AppHandle, destination: &FilePath) -> Result<(), String> {
+    match destination {
+        FilePath::Path(path) => std::fs::remove_file(path)
+            .map_err(|error| error.to_string()),
+        FilePath::Url(url) if url.scheme() == "file" => {
+            let path = url.to_file_path()
+                .map_err(|_| "Could not resolve the file URL for cleanup.".to_string())?;
+            std::fs::remove_file(path).map_err(|error| error.to_string())
+        }
+        FilePath::Url(_) => Err("Android document-provider cleanup is not supported by the Rust FS plugin API".to_string()),
+    }
 }
 
 fn is_sha256(value: &str) -> bool {
