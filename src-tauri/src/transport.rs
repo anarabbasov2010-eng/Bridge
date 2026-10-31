@@ -747,7 +747,7 @@ fn safe_file_name(value: &str) -> Result<String, String> {
         .split('.')
         .next()
         .unwrap_or_default()
-        .trim_end_matches([' ', '.'])
+        .trim_end_matches(|ch| ch == ' ' || ch == '.')
         .to_ascii_uppercase();
     let reserved_device_name = matches!(
         reserved_stem.as_str(),
@@ -762,7 +762,7 @@ fn safe_file_name(value: &str) -> Result<String, String> {
         || trimmed.len() > MAX_FILE_NAME_BYTES
         || trimmed == "."
         || trimmed == ".."
-        || trimmed.ends_with([' ', '.'])
+        || trimmed.ends_with(' ') || trimmed.ends_with('.')
         || invalid_character
         || reserved_device_name
     {
