@@ -751,6 +751,24 @@ fn safe_file_name(value: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+fn validate_file_offer(
+    transfer_id: &str,
+    file_name: &str,
+    size_bytes: u64,
+    sha256: &str,
+) -> Result<String, String> {
+    if Uuid::parse_str(transfer_id).is_err() {
+        return Err("The incoming transfer ID is invalid.".to_string());
+    }
+    if size_bytes > MAX_FILE_BYTES {
+        return Err("The offered file exceeds the 5 GiB transfer limit.".to_string());
+    }
+    if !is_sha256(sha256) {
+        return Err("The offered file has invalid SHA-256 metadata.".to_string());
+    }
+    safe_file_name(file_name)
+}
+
 fn encode_control_request(message_type: &str, pairing_code: Option<String>) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&ControlRequest {
         message_type: message_type.to_string(),
@@ -835,19 +853,20 @@ async fn run_accept_loop(
             if request.message_type == "bridge.file_offer" {
                 drop(send);
                 let transfer_id = request.transfer_id.unwrap_or_default();
-                let file_name = match request.file_name.as_deref().and_then(|name| safe_file_name(name).ok()) {
-                    Some(name) => name,
-                    None => {
-                        send_file_decision(&connection, &transfer_id, false, "The offered file name is invalid.").await;
+                let size_bytes = request.size_bytes.unwrap_or(0);
+                let sha256 = request.sha256.unwrap_or_default();
+                let file_name = match validate_file_offer(
+                    &transfer_id,
+                    request.file_name.as_deref().unwrap_or_default(),
+                    size_bytes,
+                    &sha256,
+                ) {
+                    Ok(name) => name,
+                    Err(error) => {
+                        send_file_decision(&connection, &transfer_id, false, &error).await;
                         return;
                     }
                 };
-                let size_bytes = request.size_bytes.unwrap_or(0);
-                let sha256 = request.sha256.unwrap_or_default();
-                if Uuid::parse_str(&transfer_id).is_err() || size_bytes > MAX_FILE_BYTES || !is_sha256(&sha256) {
-                    send_file_decision(&connection, &transfer_id, false, "The offered file metadata is invalid or exceeds the 5 GiB limit.").await;
-                    return;
-                }
                 let trusted = trusted_peers.lock()
                     .map(|peers| peers.contains_key(&remote_endpoint_id))
                     .unwrap_or(false);
@@ -1112,7 +1131,7 @@ async fn receive_file_payload(
     let copied = match tokio::io::copy(&mut input, &mut output).await {
         Ok(copied) => copied,
         Err(error) => {
-            let cleanup = remove_partial_destination(app, &destination);
+            let cleanup = remove_partial_destination(&destination);
             let _ = tokio::fs::remove_file(&temp_path).await;
             return Err(match cleanup {
                 Ok(()) => format!("The destination write failed and the incomplete file was removed: {error}"),
@@ -1189,6 +1208,26 @@ fn is_sha256(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_offer_validation_accepts_empty_files_and_valid_metadata() {
+        let id = Uuid::new_v4().to_string();
+        let empty_hash = format!("{:x}", Sha256::digest([]));
+        assert_eq!(
+            validate_file_offer(&id, "empty.txt", 0, &empty_hash).expect("valid empty file"),
+            "empty.txt"
+        );
+    }
+
+    #[test]
+    fn file_offer_validation_rejects_bad_names_ids_hashes_and_oversized_files() {
+        let id = Uuid::new_v4().to_string();
+        let hash = "a".repeat(64);
+        assert!(validate_file_offer("not-an-id", "safe.txt", 1, &hash).is_err());
+        assert!(validate_file_offer(&id, "../secret.txt", 1, &hash).is_err());
+        assert!(validate_file_offer(&id, "safe.txt", 1, "no-hash").is_err());
+        assert!(validate_file_offer(&id, "safe.txt", MAX_FILE_BYTES + 1, &hash).is_err());
+    }
 
     #[test]
     fn pairing_invite_is_one_time() {
